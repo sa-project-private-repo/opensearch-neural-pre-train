@@ -78,9 +78,9 @@ else
     echo ""
     echo "🤗 Transformers 및 관련 라이브러리 설치 중..."
     pip3 install transformers==4.46.3
-    pip3 install datasets==3.1.0
+    pip3 install datasets==2.21.0
     pip3 install accelerate==1.1.1
-    pip3 install huggingface-hub==0.26.2
+    pip3 install huggingface-hub==0.25.2
 
     echo ""
     echo "📊 데이터 과학 라이브러리 설치 중..."
