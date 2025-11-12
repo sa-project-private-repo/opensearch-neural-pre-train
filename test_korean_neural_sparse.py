@@ -18,6 +18,12 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoConfig
 
+# Import new loss functions
+from src.losses import (
+    neural_sparse_loss_with_regularization,
+    compute_sparsity_metrics,
+)
+
 print("=" * 60)
 print("OpenSearch Inference-Free Neural Sparse Model Test")
 print("=" * 60)
@@ -207,9 +213,11 @@ class SimpleDataset(torch.utils.data.Dataset):
         }
 
 dataset = SimpleDataset(qd_pairs, tokenizer)
-loader = DataLoader(dataset, batch_size=4, shuffle=True)
+# Increase batch size for better in-batch negatives
+BATCH_SIZE = 8  # Increased from 4
+loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-print(f"✓ 데이터 로더 생성 (batch_size=4)")
+print(f"✓ 데이터 로더 생성 (batch_size={BATCH_SIZE})")
 
 # Step 5: 손실 함수 정의
 print("\n" + "=" * 60)
@@ -217,7 +225,7 @@ print("Step 5: 손실 함수 정의")
 print("=" * 60)
 
 def compute_query_representation(query_tokens, idf_dict, vocab_size):
-    """IDF lookup으로 쿼리 sparse vector 생성"""
+    """IDF lookup으로 쿼리 sparse vector 생성 (Inference-Free!)"""
     batch_size, seq_len = query_tokens.shape
     query_sparse = torch.zeros(batch_size, vocab_size, device=query_tokens.device)
 
@@ -229,32 +237,11 @@ def compute_query_representation(query_tokens, idf_dict, vocab_size):
 
     return query_sparse
 
-def neural_sparse_loss(doc_sparse, query_sparse, relevance, idf_dict,
-                       lambda_l0=1e-3, lambda_idf=1e-2):
-    """OpenSearch Neural Sparse Loss"""
-    # Ranking loss
-    similarity = torch.sum(doc_sparse * query_sparse, dim=-1)
-    ranking_loss = F.binary_cross_entropy_with_logits(similarity, relevance, reduction='mean')
-
-    # L0 regularization
-    l0_loss = torch.mean(torch.sum(torch.abs(doc_sparse), dim=-1))
-
-    # IDF-aware penalty
-    idf_tensor = torch.tensor(
-        [idf_dict.get(i, 1.0) for i in range(doc_sparse.shape[1])],
-        device=doc_sparse.device
-    )
-    inverse_idf = 1.0 / (idf_tensor + 1e-6)
-    idf_penalty = torch.mean(torch.sum(doc_sparse * inverse_idf, dim=-1))
-
-    total_loss = ranking_loss + lambda_l0 * l0_loss + lambda_idf * idf_penalty
-
-    return total_loss, ranking_loss, l0_loss, idf_penalty
-
 print("✓ 손실 함수 정의 완료")
-print("  - Ranking Loss (BCE)")
-print("  - L0 Regularization")
-print("  - IDF-aware Penalty")
+print("  - NEW: In-Batch Negatives Contrastive Loss")
+print("  - L0 Regularization (Sparsity)")
+print("  - IDF-aware Penalty (optional)")
+print("\n⚠️  FIXED: Replaced BCE with proper contrastive loss!")
 
 # Step 6: 학습 실행
 print("\n" + "=" * 60)
@@ -264,14 +251,25 @@ print("=" * 60)
 optimizer = AdamW(doc_encoder.parameters(), lr=5e-5)
 NUM_EPOCHS = 2
 
+# Loss hyperparameters
+LAMBDA_L0 = 5e-4  # Reduced from 1e-3 to allow less sparsity
+LAMBDA_IDF = 1e-2
+TEMPERATURE = 0.05
+
 print(f"학습 설정:")
 print(f"  Epochs: {NUM_EPOCHS}")
 print(f"  Learning rate: 5e-5")
-print(f"  Batch size: 4")
+print(f"  Batch size: {BATCH_SIZE}")
+print(f"  Temperature: {TEMPERATURE}")
+print(f"  Lambda L0: {LAMBDA_L0}")
+print(f"  Lambda IDF: {LAMBDA_IDF}")
 
 for epoch in range(NUM_EPOCHS):
     doc_encoder.train()
-    total_loss = 0
+    total_loss_sum = 0
+    total_ranking_loss = 0
+    total_l0_loss = 0
+    total_idf_penalty = 0
 
     print(f"\nEpoch {epoch + 1}/{NUM_EPOCHS}")
 
@@ -284,27 +282,67 @@ for epoch in range(NUM_EPOCHS):
         # Document encoding
         doc_sparse = doc_encoder(doc_input_ids, doc_attention_mask)
 
-        # Query encoding (IDF lookup)
-        query_sparse = compute_query_representation(query_tokens, idf_id_dict, tokenizer.vocab_size)
+        # Query encoding (IDF lookup - Inference-Free!)
+        query_sparse = compute_query_representation(
+            query_tokens, idf_id_dict, tokenizer.vocab_size
+        )
 
-        # Loss
-        loss, ranking_loss, l0_loss, idf_penalty = neural_sparse_loss(
-            doc_sparse, query_sparse, relevance, idf_id_dict
+        # NEW: Use improved loss function with in-batch negatives
+        total_loss, loss_dict = neural_sparse_loss_with_regularization(
+            doc_sparse=doc_sparse,
+            query_sparse=query_sparse,
+            relevance=relevance,
+            idf_dict=idf_id_dict,
+            lambda_l0=LAMBDA_L0,
+            lambda_idf=LAMBDA_IDF,
+            temperature=TEMPERATURE,
+            use_in_batch_negatives=True,  # Key improvement!
         )
 
         # Backward
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm_(doc_encoder.parameters(), 1.0)
         optimizer.step()
 
-        total_loss += loss.item()
+        # Accumulate losses
+        total_loss_sum += total_loss.item()
+        total_ranking_loss += loss_dict['ranking'].item()
+        total_l0_loss += loss_dict['l0'].item()
+        total_idf_penalty += loss_dict['idf_penalty'].item()
 
         if (batch_idx + 1) % 2 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(loader)} - Loss: {loss.item():.4f}")
+            print(
+                f"  Batch {batch_idx + 1}/{len(loader)} - "
+                f"Total: {total_loss.item():.4f}, "
+                f"Ranking: {loss_dict['ranking'].item():.4f}, "
+                f"L0: {loss_dict['l0'].item():.4f}"
+            )
 
-    avg_loss = total_loss / len(loader)
-    print(f"✓ Epoch {epoch + 1} 완료 - Avg Loss: {avg_loss:.4f}")
+    # Epoch summary
+    num_batches = len(loader)
+    avg_total = total_loss_sum / num_batches
+    avg_ranking = total_ranking_loss / num_batches
+    avg_l0 = total_l0_loss / num_batches
+    avg_idf = total_idf_penalty / num_batches
+
+    print(f"\n✓ Epoch {epoch + 1} 완료:")
+    print(f"  Total Loss: {avg_total:.4f}")
+    print(f"  Ranking Loss: {avg_ranking:.4f}")
+    print(f"  L0 Loss: {avg_l0:.4f}")
+    print(f"  IDF Penalty: {avg_idf:.4f}")
+
+    # Compute sparsity metrics
+    doc_encoder.eval()
+    with torch.no_grad():
+        sample_batch = next(iter(loader))
+        sample_docs = doc_encoder(
+            sample_batch['doc_input_ids'].to(device),
+            sample_batch['doc_attention_mask'].to(device)
+        )
+        sparsity_metrics = compute_sparsity_metrics(sample_docs)
+        print(f"  Sparsity: {sparsity_metrics['sparsity']:.2%}")
+        print(f"  Avg non-zero tokens: {sparsity_metrics['non_zero_count_mean']:.1f}")
 
 print("\n✓ 학습 완료!")
 

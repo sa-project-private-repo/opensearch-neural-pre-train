@@ -42,3 +42,16 @@ typing-extensions==4.12.2
 # Additional utilities
 sentencepiece==0.2.0
 protobuf==5.28.3
+
+# Phase 1: Loss functions and training improvements
+# (No additional dependencies needed - using PyTorch built-ins)
+
+# Phase 3: Hard negative mining
+rank-bm25==0.2.2
+
+# Phase 4: Clustering for synonym discovery
+scipy==1.14.1  # For clustering algorithms
+hdbscan==0.8.38  # Advanced clustering (optional)
+
+# Configuration management
+pyyaml==6.0.2
