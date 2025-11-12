@@ -54,7 +54,8 @@ opensearch-neural-pre-train/
 │
 ├── models/                              # 🤖 Trained models directory (gitignored)
 │   ├── opensearch-korean-neural-sparse-v1/        # Production model
-│   └── test_korean_neural_sparse_model/           # Test model
+│   ├── test_korean_neural_sparse_model/           # Test model
+│   └── best_korean_neural_sparse_encoder.pt       # Training checkpoints
 │
 ├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
 ├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
