@@ -1,16 +1,37 @@
-# OpenSearch Korean Neural Sparse Model
+# OpenSearch Korean Neural Sparse Model (v0.3.0)
 
-한국어에 최적화된 OpenSearch inference-free neural sparse 검색 모델 학습 프로젝트
+한국어 뉴스 데이터 기반 시간 가중치 군집화를 통한 비지도 학습 Neural Sparse 검색 모델
 
 ## 🎯 프로젝트 개요
 
 OpenSearch의 **inference-free IR 모델** 표준에 따라 한국어 neural sparse 검색 모델을 학습합니다. 이 모델은 문서는 BERT로 인코딩하고, 쿼리는 tokenizer + IDF lookup만 사용하여 **매우 빠른 검색**을 제공합니다.
 
+### 🌟 v0.3.0 주요 개선사항
+
+#### ✅ **손실 함수 수정 (CRITICAL)**
+- ❌ **이전**: Binary Cross-Entropy (BCE) - dot product와 근본적으로 불일치
+- ✅ **개선**: In-batch Negatives Contrastive Loss - 올바른 ranking 학습
+
+#### ✅ **시간 기반 분석 (NEW)**
+- 뉴스 데이터의 날짜 정보 추출 및 활용
+- Temporal IDF: 최근 문서에 높은 가중치 (exponential decay)
+- **자동 트렌드 감지**: 수동 TREND_BOOST 딕셔너리 제거
+
+#### ✅ **Hard Negative Mining (NEW)**
+- BM25 기반 intelligent negative sampling
+- 랜덤 negative 대비 더 효과적인 학습
+
+#### ✅ **비지도 동의어 발견 (NEW)**
+- 시간 가중치 기반 토큰 임베딩 군집화
+- K-means/DBSCAN/Hierarchical clustering 지원
+- 완전 자동화된 동의어 그룹 생성
+
 ### 핵심 특징
 
 - ✅ **Inference-Free**: 쿼리 인코딩에 모델 inference 불필요 (BM25와 유사한 지연시간)
-- ✅ **한국어 최적화**: KLUE-BERT 기반 + 한국어 데이터셋 (KLUE, KorQuAD 등)
-- ✅ **트렌드 키워드**: 2024-2025 AI/ML 키워드 가중치 부스팅 (LLM, GPT, RAG 등)
+- ✅ **한국어 최적화**: KLUE-BERT 기반 + 한국어 뉴스/QA 데이터셋
+- ✅ **시간 가중치 IDF**: 최근 문서 우선, 트렌드 자동 감지
+- ✅ **비지도 학습**: 수동 레이블 없이 동의어 발견
 - ✅ **OpenSearch 호환**: 바로 배포 가능한 형식 (`pytorch_model.bin`, `idf.json`)
 - ✅ **Amazon Linux 2023**: EC2에서 바로 실행 가능
 
@@ -18,14 +39,21 @@ OpenSearch의 **inference-free IR 모델** 표준에 따라 한국어 neural spa
 
 ```
 opensearch-neural-pre-train/
-├── korean_neural_sparse_training.ipynb  # 📓 전체 학습 노트북 (권장)
-├── test_korean_neural_sparse.py         # 🧪 전체 테스트 스크립트
-├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
-├── demo_idf.json                        # 📊 생성된 IDF 샘플
+├── src/                                 # 🆕 Core modules (v0.3.0)
+│   ├── losses.py                        # ✅ Contrastive loss functions
+│   ├── data_loader.py                   # ✅ News data with dates
+│   ├── temporal_analysis.py             # ✅ Temporal IDF & trend detection
+│   ├── negative_sampling.py             # ✅ BM25 hard negatives
+│   └── temporal_clustering.py           # ✅ Synonym discovery
 │
+├── korean_neural_sparse_training.ipynb  # 📓 전체 학습 노트북 (권장)
+├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
+├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
+├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
+│
+├── plan.md                              # 📋 전체 개선 계획서
 ├── setup_amazon_linux_2023.sh           # 🚀 Amazon Linux 2023 자동 설치
-├── AMAZON_LINUX_2023_SETUP.md           # 📖 상세 설치 가이드
-├── requirements.txt                     # 📦 Python 의존성
+├── requirements.txt                     # 📦 Python 의존성 (업데이트됨)
 └── README.md                            # 📄 이 파일
 ```
 
