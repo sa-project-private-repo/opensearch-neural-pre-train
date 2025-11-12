@@ -66,6 +66,7 @@ opensearch-neural-pre-train/
 │
 ├── archive/                             # 🗄️ Archived scripts (old integration/fix scripts)
 ├── plan.md                              # 📋 전체 개선 계획서
+├── USAGE_EXAMPLES.md                    # 📚 src 모듈 사용 예제
 ├── ARM_INSTALL.md                       # 🍎 ARM 시스템 설치 가이드
 ├── setup_amazon_linux_2023.sh           # 🚀 Amazon Linux 2023 자동 설치
 ├── requirements.txt                     # 📦 Python 의존성
@@ -74,6 +75,18 @@ opensearch-neural-pre-train/
 ```
 
 ## 🚀 빠른 시작
+
+> 💡 **src 모듈 사용법**: 모든 함수를 직접 import하여 사용할 수 있습니다. 자세한 예제는 [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md)를 참조하세요.
+
+```python
+# 간편한 import
+from src import (
+    load_korean_news_with_dates,
+    calculate_temporal_idf,
+    neural_sparse_loss_with_regularization,
+    build_comprehensive_bilingual_dictionary,
+)
+```
 
 ### ARM 시스템 (Apple Silicon, ARM 서버)
 
