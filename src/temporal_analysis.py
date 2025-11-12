@@ -222,7 +222,8 @@ def detect_trending_tokens(
             for token_id in tokens:
                 recent_counts[token_id] += 1
 
-        if date >= historical_cutoff:
+        # Historical: between historical_cutoff and recent_cutoff (exclusive)
+        if historical_cutoff <= date < recent_cutoff:
             historical_doc_count += 1
             for token_id in tokens:
                 historical_counts[token_id] += 1
