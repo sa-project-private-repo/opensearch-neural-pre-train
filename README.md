@@ -47,16 +47,22 @@ opensearch-neural-pre-train/
 │   ├── temporal_clustering.py           # ✅ Synonym discovery
 │   └── cross_lingual_synonyms.py        # 🆕 Korean-English bilingual (NEW!)
 │
-├── korean_neural_sparse_training.ipynb        # 📓 Original training notebook
-├── korean_neural_sparse_training_v0.3.0.ipynb # 🆕 Updated with Phase 1-5 (NEW!)
+├── notebooks/                           # 📓 Jupyter notebooks
+│   ├── korean_neural_sparse_training.ipynb        # Original training notebook
+│   ├── korean_neural_sparse_training_v0.3.0.ipynb # 🆕 Updated with Phase 1-5 (NEW!)
+│   └── neural_sparse_inference.ipynb              # Inference notebook
+│
 ├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
 ├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
 ├── test_bilingual_synonyms.py           # 🆕 한영 동의어 테스트 (Phase 5, NEW!)
 ├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
 │
+├── archive/                             # 🗄️ Archived scripts (old integration/fix scripts)
 ├── plan.md                              # 📋 전체 개선 계획서
+├── ARM_INSTALL.md                       # 🍎 ARM 시스템 설치 가이드
 ├── setup_amazon_linux_2023.sh           # 🚀 Amazon Linux 2023 자동 설치
-├── requirements.txt                     # 📦 Python 의존성 (업데이트됨)
+├── requirements.txt                     # 📦 Python 의존성
+├── requirements-minimal.txt             # 📦 ARM 호환 최소 의존성
 └── README.md                            # 📄 이 파일
 ```
 
@@ -130,7 +136,11 @@ python3 test_korean_neural_sparse.py
 또는 **Jupyter 노트북** (권장):
 
 ```bash
-jupyter notebook korean_neural_sparse_training.ipynb
+# v0.3.0 전체 기능 포함 버전 (권장)
+jupyter notebook notebooks/korean_neural_sparse_training_v0.3.0.ipynb
+
+# 또는 원본 버전
+jupyter notebook notebooks/korean_neural_sparse_training.ipynb
 ```
 
 ## 📊 OpenSearch 모델 구조
