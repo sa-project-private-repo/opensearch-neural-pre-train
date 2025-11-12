@@ -10,12 +10,14 @@ Modules:
     - temporal_analysis: Time-weighted IDF and automatic trend detection
     - negative_sampling: Hard negative mining with BM25
     - temporal_clustering: Time-based clustering for synonym discovery
+    - cross_lingual_synonyms: Korean-English bilingual synonym discovery
 
 Key Features:
     ✓ In-batch negatives contrastive loss (fixes BCE issue)
     ✓ Temporal IDF with exponential decay weighting
     ✓ Automatic trend detection (replaces hardcoded TREND_BOOST)
     ✓ BM25-based hard negative mining
+    ✓ Bilingual synonyms (Korean ↔ English, e.g., '모델' ↔ 'model')
     ✓ Fully unsupervised approach
 """
 
@@ -50,6 +52,13 @@ from src.negative_sampling import (
     add_mixed_negatives,
 )
 
+# Cross-lingual synonyms
+from src.cross_lingual_synonyms import (
+    build_comprehensive_bilingual_dictionary,
+    get_default_korean_english_pairs,
+    apply_bilingual_synonyms_to_idf,
+)
+
 __all__ = [
     # Losses
     "in_batch_negatives_loss",
@@ -67,4 +76,8 @@ __all__ = [
     # Negative sampling
     "add_hard_negatives_bm25",
     "add_mixed_negatives",
+    # Cross-lingual synonyms
+    "build_comprehensive_bilingual_dictionary",
+    "get_default_korean_english_pairs",
+    "apply_bilingual_synonyms_to_idf",
 ]
