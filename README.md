@@ -52,6 +52,10 @@ opensearch-neural-pre-train/
 │   ├── korean_neural_sparse_training_v0.3.0.ipynb # 🆕 Updated with Phase 1-5 (NEW!)
 │   └── neural_sparse_inference.ipynb              # Inference notebook
 │
+├── models/                              # 🤖 Trained models directory (gitignored)
+│   ├── opensearch-korean-neural-sparse-v1/        # Production model
+│   └── test_korean_neural_sparse_model/           # Test model
+│
 ├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
 ├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
 ├── test_bilingual_synonyms.py           # 🆕 한영 동의어 테스트 (Phase 5, NEW!)
@@ -205,23 +209,24 @@ TREND_BOOST = {
 
 ### 1. 모델 저장
 
-학습 완료 후 생성되는 파일들:
+학습 완료 후 생성되는 파일들 (`models/` 디렉토리):
 
 ```
-opensearch-korean-neural-sparse-v1/
-├── pytorch_model.bin       # 문서 인코더
-├── idf.json                # 쿼리용 가중치
-├── tokenizer.json
-├── vocab.txt
-├── config.json
-└── README.md
+models/
+└── opensearch-korean-neural-sparse-v1/
+    ├── pytorch_model.bin       # 문서 인코더
+    ├── idf.json                # 쿼리용 가중치
+    ├── tokenizer.json
+    ├── vocab.txt
+    ├── config.json
+    └── README.md
 ```
 
 ### 2. OpenSearch 업로드
 
 ```bash
 # 모델 압축
-cd opensearch-korean-neural-sparse-v1
+cd models/opensearch-korean-neural-sparse-v1
 zip -r ../korean-neural-sparse-v1.zip .
 
 # OpenSearch에 업로드
@@ -310,10 +315,10 @@ import torch
 import json
 
 # 토크나이저 로드
-tokenizer = AutoTokenizer.from_pretrained("./opensearch-korean-neural-sparse-v1")
+tokenizer = AutoTokenizer.from_pretrained("./models/opensearch-korean-neural-sparse-v1")
 
 # IDF 로드
-with open("./opensearch-korean-neural-sparse-v1/idf.json") as f:
+with open("./models/opensearch-korean-neural-sparse-v1/idf.json") as f:
     idf_dict = json.load(f)
 
 # 쿼리 인코딩 (Inference-Free!)

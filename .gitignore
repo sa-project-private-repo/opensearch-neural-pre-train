@@ -1,6 +1,14 @@
+# Python virtual environment
 .venv
+
+# Model files
 *.pt
 *.bin
+
+# Models directory (all trained models)
+models/
+
+# Legacy model paths (deprecated)
 opensearch-korean-neural-sparse-v1*
 test_korean_neural_sparse_model/
 best_korean_neural_sparse_encoder.pt

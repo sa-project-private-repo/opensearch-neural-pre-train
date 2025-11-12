@@ -351,7 +351,7 @@ print("\n" + "=" * 60)
 print("Step 7: 모델 저장 (OpenSearch 호환 형식)")
 print("=" * 60)
 
-OUTPUT_DIR = "./test_korean_neural_sparse_model"
+OUTPUT_DIR = "./models/test_korean_neural_sparse_model"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # pytorch_model.bin
