@@ -57,9 +57,34 @@ opensearch-neural-pre-train/
 └── README.md                            # 📄 이 파일
 ```
 
-## 🚀 빠른 시작 (Amazon Linux 2023)
+## 🚀 빠른 시작
 
-### 1. 자동 설치 (권장)
+### ARM 시스템 (Apple Silicon, ARM 서버)
+
+**⚠️ ARM 사용자는 [ARM_INSTALL.md](ARM_INSTALL.md)를 참조하세요!**
+
+```bash
+# Python 3.10+ venv 생성
+python3 -m venv .venv
+source .venv/bin/activate
+
+# ARM 호환 최소 의존성 설치
+pip install -r requirements-minimal.txt
+
+# 테스트 실행
+python test_korean_neural_sparse.py
+```
+
+**주요 차이점**:
+- ✅ mecab/konlpy 불필요 (BERT tokenizer 사용)
+- ✅ 모든 핵심 기능 작동
+- ✅ 간편한 설치
+
+---
+
+### Amazon Linux 2023 / x86_64
+
+#### 1. 자동 설치 (권장)
 
 ```bash
 # 저장소 클론

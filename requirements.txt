@@ -15,9 +15,9 @@ huggingface-hub==0.25.2
 tokenizers==0.20.3
 safetensors==0.4.5
 
-# Korean NLP
-konlpy==0.6.0
-mecab-python3==1.0.9
+# Korean NLP (optional - not required for core functionality)
+# konlpy==0.6.0  # Optional: Only needed for advanced Korean tokenization
+# mecab-python3==1.0.9  # ⚠️ ARM systems: Installation may fail, not required
 
 # Data science (Python 3.12 compatible)
 numpy==2.1.3
