@@ -44,11 +44,14 @@ opensearch-neural-pre-train/
 │   ├── data_loader.py                   # ✅ News data with dates
 │   ├── temporal_analysis.py             # ✅ Temporal IDF & trend detection
 │   ├── negative_sampling.py             # ✅ BM25 hard negatives
-│   └── temporal_clustering.py           # ✅ Synonym discovery
+│   ├── temporal_clustering.py           # ✅ Synonym discovery
+│   └── cross_lingual_synonyms.py        # 🆕 Korean-English bilingual (NEW!)
 │
-├── korean_neural_sparse_training.ipynb  # 📓 전체 학습 노트북 (권장)
+├── korean_neural_sparse_training.ipynb        # 📓 Original training notebook
+├── korean_neural_sparse_training_v0.3.0.ipynb # 🆕 Updated with Phase 1-5 (NEW!)
 ├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
 ├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
+├── test_bilingual_synonyms.py           # 🆕 한영 동의어 테스트 (Phase 5, NEW!)
 ├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
 │
 ├── plan.md                              # 📋 전체 개선 계획서
