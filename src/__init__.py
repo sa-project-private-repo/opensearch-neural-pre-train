@@ -19,12 +19,20 @@ Key Features:
     ✓ BM25-based hard negative mining
     ✓ Bilingual synonyms (Korean ↔ English, e.g., '모델' ↔ 'model')
     ✓ Fully unsupervised approach
+
+Quick Start:
+    >>> from src import (
+    ...     load_korean_news_with_dates,
+    ...     calculate_temporal_idf,
+    ...     neural_sparse_loss_with_regularization,
+    ...     build_comprehensive_bilingual_dictionary,
+    ... )
 """
 
 __version__ = "0.3.0"
 __author__ = "OpenSearch Neural Sparse Team"
 
-# Loss functions
+# === Loss functions ===
 from src.losses import (
     in_batch_negatives_loss,
     margin_ranking_loss,
@@ -33,50 +41,92 @@ from src.losses import (
     compute_sparsity_metrics,
 )
 
-# Data loading
+# === Data loading ===
 from src.data_loader import (
     load_korean_news_with_dates,
     load_multiple_korean_datasets,
+    create_time_windows,
+    get_recent_documents,
 )
 
-# Temporal analysis
+# === Temporal analysis ===
 from src.temporal_analysis import (
     calculate_temporal_idf,
+    calculate_windowed_idf,
     detect_trending_tokens,
     build_trend_boost_dict,
+    apply_temporal_boost_to_idf,
+    analyze_token_frequency_over_time,
 )
 
-# Negative sampling
+# === Negative sampling ===
 from src.negative_sampling import (
     add_hard_negatives_bm25,
+    add_random_negatives,
     add_mixed_negatives,
+    balance_positive_negative_ratio,
 )
 
-# Cross-lingual synonyms
+# === Temporal clustering (synonym discovery) ===
+from src.temporal_clustering import (
+    cluster_tokens_temporal,
+    build_synonym_groups_from_clusters,
+    discover_synonyms_temporal,
+    merge_synonym_dictionaries,
+    filter_synonyms_by_frequency,
+)
+
+# === Cross-lingual synonyms ===
 from src.cross_lingual_synonyms import (
+    extract_bilingual_terms,
+    discover_cross_lingual_synonyms_by_embedding,
     build_comprehensive_bilingual_dictionary,
     get_default_korean_english_pairs,
     apply_bilingual_synonyms_to_idf,
 )
 
 __all__ = [
-    # Losses
+    # === Version info ===
+    "__version__",
+    "__author__",
+
+    # === Loss functions ===
     "in_batch_negatives_loss",
     "margin_ranking_loss",
     "contrastive_loss_with_hard_negatives",
     "neural_sparse_loss_with_regularization",
     "compute_sparsity_metrics",
-    # Data loading
+
+    # === Data loading ===
     "load_korean_news_with_dates",
     "load_multiple_korean_datasets",
-    # Temporal analysis
+    "create_time_windows",
+    "get_recent_documents",
+
+    # === Temporal analysis ===
     "calculate_temporal_idf",
+    "calculate_windowed_idf",
     "detect_trending_tokens",
     "build_trend_boost_dict",
-    # Negative sampling
+    "apply_temporal_boost_to_idf",
+    "analyze_token_frequency_over_time",
+
+    # === Negative sampling ===
     "add_hard_negatives_bm25",
+    "add_random_negatives",
     "add_mixed_negatives",
-    # Cross-lingual synonyms
+    "balance_positive_negative_ratio",
+
+    # === Temporal clustering ===
+    "cluster_tokens_temporal",
+    "build_synonym_groups_from_clusters",
+    "discover_synonyms_temporal",
+    "merge_synonym_dictionaries",
+    "filter_synonyms_by_frequency",
+
+    # === Cross-lingual synonyms ===
+    "extract_bilingual_terms",
+    "discover_cross_lingual_synonyms_by_embedding",
     "build_comprehensive_bilingual_dictionary",
     "get_default_korean_english_pairs",
     "apply_bilingual_synonyms_to_idf",
