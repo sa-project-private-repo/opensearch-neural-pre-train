@@ -7,6 +7,12 @@ so that "모델" and "model" are treated as synonyms.
 """
 
 import sys
+from pathlib import Path
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 import torch
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 

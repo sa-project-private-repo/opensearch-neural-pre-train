@@ -5,6 +5,13 @@ OpenSearch Inference-Free Neural Sparse 모델 테스트 스크립트
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 import json
 import math
 import numpy as np

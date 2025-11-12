@@ -57,9 +57,11 @@ opensearch-neural-pre-train/
 │   ├── test_korean_neural_sparse_model/           # Test model
 │   └── best_korean_neural_sparse_encoder.pt       # Training checkpoints
 │
-├── test_korean_neural_sparse.py         # 🧪 개선된 테스트 스크립트 (Phase 1)
-├── test_temporal_features.py            # 🆕 시간 기반 기능 테스트 (Phase 2)
-├── test_bilingual_synonyms.py           # 🆕 한영 동의어 테스트 (Phase 5, NEW!)
+├── tests/                               # 🧪 Test scripts
+│   ├── test_korean_neural_sparse.py     # Phase 1: Improved loss functions
+│   ├── test_temporal_features.py        # Phase 2: Temporal analysis
+│   └── test_bilingual_synonyms.py       # Phase 5: Cross-lingual synonyms
+│
 ├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
 │
 ├── archive/                             # 🗄️ Archived scripts (old integration/fix scripts)
@@ -134,8 +136,14 @@ Query: 'OpenSearch neural sparse 검색'
 ### 3. 전체 모델 학습
 
 ```bash
-# PyTorch 기반 전체 학습
-python3 test_korean_neural_sparse.py
+# PyTorch 기반 전체 학습 테스트
+python tests/test_korean_neural_sparse.py
+
+# 시간 기반 분석 테스트
+python tests/test_temporal_features.py
+
+# 한영 동의어 테스트
+python tests/test_bilingual_synonyms.py
 ```
 
 또는 **Jupyter 노트북** (권장):
