@@ -71,7 +71,8 @@ pip install --upgrade pip setuptools wheel
 # LLM inference (ARM-compatible)
 # vLLM은 ARM 지원 제한적이므로 제외
 accelerate==1.1.1         # Already exists - 메모리 최적화
-autoawq==0.2.7            # AWQ quantization (Qwen2.5 권장, Python 3.12 OK)
+# AWQ quantization: Transformers 4.46.3+ 네이티브 지원 (AutoAWQ 불필요)
+# AutoAWQ는 deprecated되었고 ARM aarch64 미지원
 optimum==1.23.3           # ONNX Runtime 최적화
 sentencepiece==0.2.0      # Already exists - tokenizer
 
@@ -80,8 +81,9 @@ sentencepiece==0.2.0      # Already exists - tokenizer
 #                          # ARM + Python 3.12: 소스 빌드 필요할 수 있음
 ```
 
-**전략**: Hugging Face Transformers + AutoAWQ quantization 사용
-- Qwen2.5: AutoAWQ로 4-bit 양자화 (ARM + Python 3.12 검증)
+**전략**: Hugging Face Transformers 네이티브 AWQ 지원 사용
+- **Qwen3**: Transformers 네이티브 AWQ 로딩 (ARM aarch64 완벽 지원)
+- **AutoAWQ 불필요**: Transformers 4.46.3+가 AWQ를 네이티브로 지원
 - gpt-oss-20b: GGUF + llama.cpp (ARM 최적화, Python 3.12 빌드 필요)
 - accelerate로 멀티 GPU/CPU offloading
 - 모든 패키지 Python 3.12 호환 버전 사용
@@ -636,7 +638,8 @@ pip install --upgrade pip setuptools wheel
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
 # Qwen3 사용 시 (권장)
-pip install autoawq optimum accelerate transformers
+# Transformers 4.46.3+가 AWQ를 네이티브로 지원하므로 AutoAWQ 불필요
+pip install optimum accelerate transformers
 
 # gpt-oss-20b 사용 시 (추가) - ARM + Python 3.12 빌드
 CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-cache-dir
@@ -645,7 +648,7 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-cache-dir
 **Python 3.12 주의사항**:
 - llama-cpp-python은 소스 빌드가 필요할 수 있음 (ARM + CUDA)
 - CMAKE_ARGS로 CUDA 지원 활성화
-- Qwen3-AWQ는 Python 3.12에서 별도 빌드 불필요
+- **Transformers 네이티브 AWQ**: AutoAWQ 불필요, ARM aarch64 완벽 지원
 
 ### Step 2: LLM 모델 다운로드
 
