@@ -57,5 +57,6 @@ hdbscan==0.8.38  # Advanced clustering (optional)
 pyyaml==6.0.2
 
 # LLM inference (ARM-compatible, Python 3.12)
-autoawq==0.2.7            # AWQ quantization for Qwen3-30B-A3B-Thinking-2507 (ARM + Python 3.12)
+# AWQ quantization: Transformers 4.46.3+ has native AWQ support (no AutoAWQ needed)
+# AutoAWQ is deprecated and does not support ARM aarch64
 # llama-cpp-python==0.3.4  # Optional: gpt-oss-20b GGUF support (requires build)

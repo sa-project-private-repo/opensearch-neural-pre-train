@@ -116,8 +116,9 @@ def load_qwen3_awq(
     )
     print(f"✓ Tokenizer loaded (vocab size: {len(tokenizer):,})")
 
-    # Load model with AWQ quantization
+    # Load model with AWQ quantization (Transformers native support)
     print("\n2️⃣ Loading model with AWQ quantization...")
+    print("   Using Transformers native AWQ support (ARM compatible)")
     print("   This may take a few minutes...")
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -125,6 +126,7 @@ def load_qwen3_awq(
         device_map=device_map,
         low_cpu_mem_usage=low_cpu_mem_usage,
         trust_remote_code=True,
+        # Transformers 4.57+ has native AWQ support, no AutoAWQ needed
     )
 
     print(f"✓ Model loaded")
