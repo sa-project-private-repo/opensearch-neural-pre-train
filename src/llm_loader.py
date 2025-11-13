@@ -5,8 +5,9 @@ This module provides loaders for Qwen3 and gpt-oss-20b models
 optimized for ARM architecture with CUDA support.
 
 Supported models:
-- Qwen3-14B-Instruct-AWQ (4-bit, ~4GB)
-- Qwen3-7B-Instruct-AWQ (4-bit, ~2GB)
+- Qwen3-30B-A3B-Thinking-2507-AWQ (4-bit, ~16GB) - Reasoning optimized
+- Qwen2.5-14B-Instruct-AWQ (4-bit, ~4GB)
+- Qwen2.5-7B-Instruct-AWQ (4-bit, ~2GB)
 - gpt-oss-20b (GGUF Q4, ~5GB) - requires llama-cpp-python
 
 Requirements:
@@ -78,7 +79,7 @@ def check_gpu_memory() -> Dict[str, Any]:
 
 
 def load_qwen3_awq(
-    model_name: str = "Qwen/Qwen3-14B-Instruct-AWQ",
+    model_name: str = "QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ",
     device_map: str = "auto",
     low_cpu_mem_usage: bool = True,
 ) -> Tuple[Any, Any]:
@@ -87,8 +88,10 @@ def load_qwen3_awq(
 
     Args:
         model_name: Hugging Face model name
-            - "Qwen/Qwen3-14B-Instruct-AWQ" (~4GB VRAM)
-            - "Qwen/Qwen3-7B-Instruct-AWQ" (~2GB VRAM)
+            - "QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ" (~16GB VRAM) - Reasoning optimized ⭐
+            - "cpatonn/Qwen3-30B-A3B-Thinking-2507-AWQ-4bit" (~16GB VRAM) - Alternative
+            - "Qwen/Qwen2.5-14B-Instruct-AWQ" (~4GB VRAM)
+            - "Qwen/Qwen2.5-7B-Instruct-AWQ" (~2GB VRAM)
         device_map: Device placement strategy ("auto", "cuda", "cpu")
         low_cpu_mem_usage: Use low CPU memory during loading
 
