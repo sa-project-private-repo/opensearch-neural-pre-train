@@ -96,18 +96,19 @@ sentencepiece==0.2.0      # Already exists - tokenizer
 - Prompt template 관리
 - CPU offloading 지원 (메모리 부족 시)
 
-**사용 모델 (요구사항)**:
-1. **gpt-oss-20b** (OpenAI, 21B params, 3.6B active)
-2. **Qwen2.5** 시리즈 (Alibaba, 다양한 크기)
+**사용 모델 (선택)**:
+1. **Qwen3-30B-A3B-Thinking-2507** (Alibaba, 30.5B params, 3.3B active MoE) ⭐ **최우선 권장**
+2. **Qwen2.5** 시리즈 (Alibaba, 7B~14B)
+3. **gpt-oss-20b** (OpenAI, 21B params, 3.6B active)
 
-**선택 전략**: GPU 메모리 고려하여 Qwen2.5-14B 또는 gpt-oss-20b (GGUF) 추천
+**선택 전략**: Qwen3-30B-A3B-Thinking-2507-AWQ (~16GB) 권장 - 추론 최적화 및 한국어 성능 우수
 
 체크리스트:
 - [ ] `load_qwen3_awq()` 함수 구현 (AWQ 4-bit)
 - [ ] `load_gpt_oss_gguf()` 함수 구현 (GGUF, optional)
 - [ ] `generate_text()` 함수 구현
 - [ ] `generate_batch()` 배치 추론 함수
-- [ ] Prompt template 정의 (Qwen2.5/gpt-oss 최적화)
+- [ ] Prompt template 정의 (Qwen3/gpt-oss 최적화)
 - [ ] GPU 메모리 모니터링 유틸리티
 - [ ] CPU offloading 옵션
 
@@ -245,10 +246,10 @@ from src.llm_loader import load_qwen3_awq, check_gpu_memory
 # GPU 메모리 체크
 check_gpu_memory()
 
-# Qwen2.5-14B-AWQ 모델 로딩 (4-bit quantization)
-print("\n📥 Qwen2.5-14B-AWQ 모델 로딩 중...")
+# Qwen3-30B-A3B-Thinking-2507-AWQ 모델 로딩 (4-bit quantization, reasoning optimized)
+print("\n📥 Qwen3-30B-A3B-Thinking-2507-AWQ 모델 로딩 중...")
 llm_model, llm_tokenizer = load_qwen3_awq(
-    model_name="Qwen/Qwen2.5-14B-Instruct-AWQ",
+    model_name="QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ",
     device_map="auto",
 )
 
@@ -370,7 +371,7 @@ print(df_comparison)
 ├────────────────────────────────────────────────────┤
 │ 🆕 LLM 확장 워크플로우 (신규)                      │
 ├────────────────────────────────────────────────────┤
-│ 13. [NEW] LLM 모델 로딩 (Qwen2.5-14B-AWQ)         │
+│ 13. [NEW] LLM 모델 로딩 (Qwen3-30B-Thinking)      │
 │ 14. [NEW] 합성 데이터 생성                         │
 │     - Document → Query 생성                        │
 │     - 품질 필터링                                  │
@@ -421,21 +422,37 @@ print(df_comparison)
 - **현재 사용량**: 4.5GB (Jupyter 프로세스)
 - **사용 가능 메모리**: 예상 ~12-16GB (GB10 총 메모리 미확인)
 - **BERT 학습 메모리**: ~4-6GB (현재 사용 중)
-- **LLM 추론 메모리** (요구사항 모델):
-  - Qwen2.5-14B (AWQ 4-bit): ~4GB ⭐
+- **LLM 추론 메모리**:
+  - Qwen3-30B-A3B-Thinking-2507 (AWQ 4-bit): ~16GB ⭐ **최우선 권장**
+  - Qwen2.5-14B (AWQ 4-bit): ~4GB
   - Qwen2.5-7B (AWQ 4-bit): ~2GB
   - gpt-oss-20b (GGUF Q4): ~5GB
-  - Qwen2.5-0.6B (INT8): ~0.3GB (테스트용)
 
 **권장 전략**:
-- **Option A**: Qwen2.5-14B-AWQ 사용 (4-bit, ~4GB) - 성능 우선
-- **Option B**: Qwen2.5-7B-AWQ 사용 (4-bit, ~2GB) - 안정성 우선
+- **Option A**: Qwen3-30B-A3B-Thinking-2507-AWQ (4-bit, ~16GB) - 추론 최적화, 성능 최고 ⭐
+- **Option B**: Qwen2.5-14B-AWQ (4-bit, ~4GB) - 메모리 제약 시
 - BERT 학습 완료 후 LLM 로딩 (순차 실행 권장)
 - 필요 시 CPU offloading 활용 (accelerate)
 
-### LLM 선택지 (요구사항: gpt-oss-20b 또는 Qwen2.5)
+### LLM 선택지
 
-#### Option 1: Qwen2.5-14B-Instruct ⭐ 최우선 추천
+#### Option 1: Qwen3-30B-A3B-Thinking-2507 ⭐⭐⭐ 최우선 권장
+- **크기**: 30.5B params (MoE: 3.3B activated per token, ~16GB AWQ 4-bit)
+- **장점**:
+  - **추론 최적화** (Thinking mode): 수학, 코딩, 논리적 추론 탁월
+  - **한국어 성능 우수** (다국어 모델)
+  - **256K 긴 컨텍스트** 지원 (최대 1M 토큰)
+  - MoE 구조로 메모리 효율적 (30.5B 중 3.3B만 활성화)
+  - ARM aarch64 완벽 지원 (검증됨)
+  - 4-bit AWQ quantization 성능 우수
+- **단점**: 메모리 사용량 높음 (~16GB)
+- **Hugging Face**:
+  - `QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ` (4-bit) ⭐
+  - `cpatonn/Qwen3-30B-A3B-Thinking-2507-AWQ-4bit` (4-bit, 대안)
+- **릴리스**: 2025년 7월 31일
+- **특화 기능**: Tool calling, Agentic applications, Competition-level problem solving
+
+#### Option 2: Qwen2.5-14B-Instruct
 - **크기**: 14B params (~28GB FP16, ~7GB INT8, ~4GB Q4)
 - **장점**:
   - ARM aarch64 완벽 지원 (검증됨)
@@ -477,9 +494,10 @@ print(df_comparison)
 - **Hugging Face**: `Qwen/Qwen2.5-0.6B-Instruct`
 
 **최종 추천**:
-- **메모리 여유 있음**: Qwen2.5-14B-AWQ (4-bit, ~4GB) ⭐
-- **메모리 제한적**: Qwen2.5-7B-AWQ (4-bit, ~2GB)
-- **gpt-oss-20b 필수**: GGUF Q4_0 버전 (~5GB)
+- **메모리 충분 (16GB+)**: Qwen3-30B-A3B-Thinking-2507-AWQ (4-bit, ~16GB) ⭐⭐⭐ **최고 성능**
+- **메모리 제한적 (8GB)**: Qwen2.5-14B-AWQ (4-bit, ~4GB) ⭐
+- **메모리 부족 (4GB)**: Qwen2.5-7B-AWQ (4-bit, ~2GB)
+- **gpt-oss-20b 필수 시**: GGUF Q4_0 버전 (~5GB)
 
 ### 품질 vs. 비용 트레이드오프
 - **고품질 전략**: LLM으로 모든 동의어 검증 (느림, 비용 높음)
@@ -509,8 +527,8 @@ print(df_comparison)
 
 - [ ] 새 노트북 생성 완료 (`korean_neural_sparse_training_v2_llm.ipynb`)
 - [ ] 기존 노트북 내용 100% 유지 (누락 없음)
-- [ ] Qwen2.5-14B-AWQ 또는 gpt-oss-20b 모델 로딩 성공
-- [ ] GPU 메모리 사용량 12GB 이내 유지
+- [ ] Qwen3-30B-A3B-Thinking-2507-AWQ 모델 로딩 성공
+- [ ] GPU 메모리 사용량 20GB 이내 유지
 - [ ] 최소 1,000개 이상의 합성 Query-Document pairs 생성
 - [ ] 한영 동의어 사전 크기 2배 이상 증가
 - [ ] 합성 데이터로 학습 시 검색 정확도 향상 (MRR/NDCG)
@@ -557,6 +575,8 @@ print(df_comparison)
 - [Accelerate - Memory Optimization](https://huggingface.co/docs/accelerate/index)
 - [InPars: Data Augmentation for Information Retrieval](https://arxiv.org/abs/2202.05144)
 - [Promptagator: Few-shot Dense Retrieval](https://arxiv.org/abs/2209.11755)
+- [Qwen3-30B-A3B-Thinking-2507 Model Card](https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507)
+- [Qwen3-30B-A3B-Thinking-2507 AWQ Quantization](https://huggingface.co/QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ)
 - [Qwen2.5 Model Card](https://huggingface.co/Qwen/Qwen2.5-14B-Instruct)
 - [Qwen2.5 AWQ Quantization](https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-AWQ)
 - [gpt-oss-20b Model Card](https://huggingface.co/openai/gpt-oss-20b)
@@ -615,7 +635,7 @@ pip install --upgrade pip setuptools wheel
 # PyTorch 설치 (CUDA 12.1 for GB10)
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
-# Qwen2.5 사용 시 (권장)
+# Qwen3 사용 시 (권장)
 pip install autoawq optimum accelerate transformers
 
 # gpt-oss-20b 사용 시 (추가) - ARM + Python 3.12 빌드
@@ -625,15 +645,15 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-cache-dir
 **Python 3.12 주의사항**:
 - llama-cpp-python은 소스 빌드가 필요할 수 있음 (ARM + CUDA)
 - CMAKE_ARGS로 CUDA 지원 활성화
-- Qwen2.5-AWQ는 Python 3.12에서 별도 빌드 불필요
+- Qwen3-AWQ는 Python 3.12에서 별도 빌드 불필요
 
 ### Step 2: LLM 모델 다운로드
 
-#### Option A: Qwen2.5-14B (AWQ 4-bit) - 권장 ⭐
+#### Option A: Qwen3-30B-A3B-Thinking-2507 (AWQ 4-bit) - 최우선 권장 ⭐⭐⭐
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "Qwen/Qwen2.5-14B-Instruct-AWQ"
+model_name = "QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -642,9 +662,9 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 ```
 
-#### Option B: Qwen3-7B (AWQ 4-bit) - 메모리 제약 시
+#### Option B: Qwen2.5-14B (AWQ 4-bit) - 메모리 제약 시
 ```python
-model_name = "Qwen/Qwen3-7B-Instruct-AWQ"
+model_name = "Qwen/Qwen2.5-14B-Instruct-AWQ"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -684,7 +704,7 @@ cp korean_neural_sparse_training.ipynb korean_neural_sparse_training_v2_llm.ipyn
 # 섹션 13: LLM 로딩
 from src.llm_loader import load_qwen3_awq
 llm_model, llm_tokenizer = load_qwen3_awq(
-    model_name="Qwen/Qwen3-14B-Instruct-AWQ",
+    model_name="QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ",
 )
 
 # 섹션 14: 합성 데이터 생성
