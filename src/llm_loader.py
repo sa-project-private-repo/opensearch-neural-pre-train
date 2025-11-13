@@ -79,19 +79,18 @@ def check_gpu_memory() -> Dict[str, Any]:
 
 
 def load_qwen3_awq(
-    model_name: str = "QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ",
+    model_name: str = "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8",
     device_map: str = "auto",
     low_cpu_mem_usage: bool = True,
 ) -> Tuple[Any, Any]:
     """
-    Load Qwen3 model with AWQ 4-bit quantization (ARM compatible).
+    Load Qwen3 model with quantization (ARM aarch64 compatible).
 
     Args:
         model_name: Hugging Face model name
-            - "QuantTrio/Qwen3-30B-A3B-Thinking-2507-AWQ" (~16GB VRAM) - Reasoning optimized ⭐
-            - "cpatonn/Qwen3-30B-A3B-Thinking-2507-AWQ-4bit" (~16GB VRAM) - Alternative
-            - "Qwen/Qwen2.5-14B-Instruct-AWQ" (~4GB VRAM)
-            - "Qwen/Qwen2.5-7B-Instruct-AWQ" (~2GB VRAM)
+            - "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8" (~30GB VRAM) - FP8 quantization ⭐ ARM compatible
+            - "Qwen/Qwen3-30B-A3B-Thinking-2507" (~60GB VRAM) - BF16, full precision
+            - "Qwen/Qwen2.5-14B-Instruct" (~28GB VRAM) - Smaller alternative
         device_map: Device placement strategy ("auto", "cuda", "cpu")
         low_cpu_mem_usage: Use low CPU memory during loading
 
@@ -101,12 +100,18 @@ def load_qwen3_awq(
     Example:
         >>> model, tokenizer = load_qwen3_awq()
         >>> response = model.generate(**tokenizer("Hello", return_tensors="pt"))
+
+    Note:
+        AWQ quantization requires autoawq package which doesn't support ARM aarch64.
+        Using FP8 quantization instead, which is natively supported by Transformers.
+        FP8 provides good compression (~30GB) while maintaining high quality.
     """
     print("\n" + "="*70)
-    print(f"📥 Loading Qwen3 Model (AWQ 4-bit)")
+    print(f"📥 Loading Qwen3 Model (FP8 Quantization)")
     print("="*70)
     print(f"Model: {model_name}")
     print(f"Device map: {device_map}")
+    print(f"💡 Using FP8 quantization (ARM aarch64 compatible)")
 
     # Load tokenizer
     print("\n1️⃣ Loading tokenizer...")
@@ -116,9 +121,9 @@ def load_qwen3_awq(
     )
     print(f"✓ Tokenizer loaded (vocab size: {len(tokenizer):,})")
 
-    # Load model with AWQ quantization (Transformers native support)
-    print("\n2️⃣ Loading model with AWQ quantization...")
-    print("   Using Transformers native AWQ support (ARM compatible)")
+    # Load model with FP8 quantization (Transformers native support)
+    print("\n2️⃣ Loading model with FP8 quantization...")
+    print("   Using Transformers native FP8 support (no external deps needed)")
     print("   This may take a few minutes...")
 
     model = AutoModelForCausalLM.from_pretrained(
