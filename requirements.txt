@@ -56,7 +56,8 @@ hdbscan==0.8.38  # Advanced clustering (optional)
 # Configuration management
 pyyaml==6.0.2
 
-# LLM inference (ARM-compatible, Python 3.12)
-# AWQ quantization: Transformers 4.46.3+ has native AWQ support (no AutoAWQ needed)
-# AutoAWQ is deprecated and does not support ARM aarch64
+# LLM inference (ARM aarch64 compatible, Python 3.12)
+# Using FP8 quantization: Transformers 4.46.3+ native support, no external deps
+# AWQ quantization NOT supported: autoawq is deprecated and doesn't support ARM aarch64
+# FP8 provides good compression (~30GB vs ~60GB BF16) with native ARM support
 # llama-cpp-python==0.3.4  # Optional: gpt-oss-20b GGUF support (requires build)
