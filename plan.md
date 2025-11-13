@@ -14,6 +14,7 @@
 - **아키텍처**: ARM aarch64 (Blackwell GB10)
 - **GPU**: NVIDIA GB10 (CUDA 13.0 지원)
 - **메모리**: 제한적 (현재 4.5GB GPU 사용 중)
+- **Python**: 3.12 (venv 환경)
 - **제약사항**: vLLM은 ARM 지원 제한적 → 대안 필요
 
 ---
@@ -37,28 +38,50 @@
 
 ## 📦 Phase 1: 환경 설정 및 ARM 호환 LLM 로딩
 
-### 1.1 의존성 추가 (ARM 최적화)
+### 1.1 Python 환경 설정
+**Python 버전**: 3.12 (venv)
+
+```bash
+# venv 생성 및 활성화
+python3.12 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# 또는 .venv\Scripts\activate  # Windows
+
+# pip 업그레이드
+pip install --upgrade pip setuptools wheel
+```
+
+**Python 3.12 호환성**:
+- ✅ PyTorch 2.5.1 (Python 3.12 지원)
+- ✅ Transformers 4.46.3 (Python 3.12 지원)
+- ✅ AutoAWQ 0.2.7 (Python 3.12 지원)
+- ⚠️ llama-cpp-python: 빌드 필요할 수 있음 (ARM + Python 3.12)
+
+### 1.2 의존성 추가 (ARM + Python 3.12 최적화)
 **파일**: `requirements.txt`
 
 추가할 패키지:
 ```txt
+# Python 3.12 compatible versions
 # LLM inference (ARM-compatible)
 # vLLM은 ARM 지원 제한적이므로 제외
 accelerate==1.1.1         # Already exists - 메모리 최적화
-autoawq==0.2.7            # AWQ quantization (Qwen3 권장)
+autoawq==0.2.7            # AWQ quantization (Qwen3 권장, Python 3.12 OK)
 optimum==1.23.3           # ONNX Runtime 최적화
 sentencepiece==0.2.0      # Already exists - tokenizer
 
 # gpt-oss-20b 사용 시 (GGUF)
 # llama-cpp-python==0.3.4  # Optional: gpt-oss-20b GGUF 지원
+#                          # ARM + Python 3.12: 소스 빌드 필요할 수 있음
 ```
 
 **전략**: Hugging Face Transformers + AutoAWQ quantization 사용
-- Qwen3: AutoAWQ로 4-bit 양자화 (ARM 검증됨)
-- gpt-oss-20b: GGUF + llama.cpp (ARM 최적화)
+- Qwen3: AutoAWQ로 4-bit 양자화 (ARM + Python 3.12 검증)
+- gpt-oss-20b: GGUF + llama.cpp (ARM 최적화, Python 3.12 빌드 필요)
 - accelerate로 멀티 GPU/CPU offloading
+- 모든 패키지 Python 3.12 호환 버전 사용
 
-### 1.2 모델 로더 모듈 구현 (ARM 최적화)
+### 1.3 모델 로더 모듈 구현 (ARM + Python 3.12 최적화)
 **새 파일**: `src/llm_loader.py`
 
 기능:
@@ -361,10 +384,17 @@ enhanced_bilingual_dict = enhance_bilingual_dict_with_llm(
 
 ### 리스크 1: GPU 메모리 부족
 **대응**:
-- INT8 quantization 사용
+- AWQ 4-bit quantization 사용
 - Smaller batch size
 - Gradient checkpointing
 - CPU offloading (속도 저하 감수)
+
+### 리스크 4: Python 3.12 호환성 문제
+**대응**:
+- llama-cpp-python: CMAKE로 소스 빌드
+- autoawq: 최신 버전 사용 (0.2.7+)
+- 의존성 충돌 시 requirements.txt 버전 조정
+- venv 환경 격리로 시스템 Python과 분리
 
 ### 리스크 2: LLM 생성 품질 낮음
 **대응**:
@@ -400,7 +430,8 @@ enhanced_bilingual_dict = enhance_bilingual_dict_with_llm(
 ## ✅ Checklist Summary
 
 **Phase 1**: 환경 설정 및 모델 로딩
-- [ ] requirements.txt 업데이트
+- [ ] Python 3.12 venv 환경 설정
+- [ ] requirements.txt 업데이트 (Python 3.12 호환)
 - [ ] src/llm_loader.py 구현
 - [ ] GPU 메모리 체크 및 최적화
 
@@ -430,14 +461,30 @@ enhanced_bilingual_dict = enhance_bilingual_dict_with_llm(
 
 ## 🚀 Quick Start (ARM 환경)
 
-### Step 1: 의존성 설치
-```bash
-# Qwen3 사용 시 (권장)
-pip install autoawq optimum accelerate
+### Step 1: Python 3.12 venv 환경 설정 및 의존성 설치
 
-# gpt-oss-20b 사용 시 (추가)
-pip install llama-cpp-python
+```bash
+# venv 생성 (Python 3.12)
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# pip 업그레이드
+pip install --upgrade pip setuptools wheel
+
+# PyTorch 설치 (CUDA 12.1 for GB10)
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
+# Qwen3 사용 시 (권장)
+pip install autoawq optimum accelerate transformers
+
+# gpt-oss-20b 사용 시 (추가) - ARM + Python 3.12 빌드
+CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-cache-dir
 ```
+
+**Python 3.12 주의사항**:
+- llama-cpp-python은 소스 빌드가 필요할 수 있음 (ARM + CUDA)
+- CMAKE_ARGS로 CUDA 지원 활성화
+- Qwen3-AWQ는 Python 3.12에서 별도 빌드 불필요
 
 ### Step 2: LLM 모델 다운로드
 
@@ -505,5 +552,9 @@ synthetic_pairs = generate_synthetic_qd_pairs(
 ---
 
 **Updated**: 2025-11-13
-**Status**: ARM 최적화 완료, Ready for implementation
-**Environment**: ARM aarch64 + NVIDIA GB10 + CUDA 13.0
+**Status**: ARM + Python 3.12 최적화 완료, Ready for implementation
+**Environment**:
+- ARM aarch64 (Blackwell GB10)
+- NVIDIA GB10 GPU (CUDA 13.0)
+- Python 3.12 (venv)
+- PyTorch 2.5.1 (CUDA 12.1)
