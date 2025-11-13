@@ -390,3 +390,223 @@ def apply_bilingual_synonyms_to_idf(
     print(f"✓ Updated {updates:,} IDF entries with bilingual synonyms")
 
     return enhanced_idf
+
+
+# ============================================================================
+# LLM-based Synonym Verification (New in v2)
+# ============================================================================
+
+def verify_synonym_pair_with_llm(
+    word1: str,
+    word2: str,
+    llm_model,
+    llm_tokenizer,
+    max_new_tokens: int = 100,
+) -> Tuple[bool, str]:
+    """
+    Verify if two words are synonyms using LLM.
+
+    Args:
+        word1: First word
+        word2: Second word
+        llm_model: Loaded LLM model
+        llm_tokenizer: Loaded tokenizer
+        max_new_tokens: Max tokens in generation
+
+    Returns:
+        Tuple of (is_synonym: bool, reason: str)
+
+    Example:
+        >>> is_syn, reason = verify_synonym_pair_with_llm(
+        ...     "모델", "model", llm_model, llm_tokenizer
+        ... )
+        >>> print(is_syn)  # True
+        >>> print(reason)  # "같은 의미의 한영 동의어입니다."
+    """
+    from src.llm_loader import generate_text
+
+    prompt = f"""다음 두 단어가 같은 의미를 가지거나 동의어 관계인지 판단하세요.
+
+단어 1: {word1}
+단어 2: {word2}
+
+같은 의미이거나 동의어라면 "예", 아니면 "아니오"로 답하고 간단한 이유를 설명하세요.
+
+답변:"""
+
+    generated = generate_text(
+        model=llm_model,
+        tokenizer=llm_tokenizer,
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=0.3,  # Lower temperature for more deterministic
+        do_sample=True,
+    )
+
+    # Parse response
+    generated_lower = generated.lower()
+    is_synonym = "예" in generated_lower or "yes" in generated_lower
+
+    return is_synonym, generated.strip()
+
+
+def enhance_bilingual_dict_with_llm(
+    initial_dict: Dict[str, List[str]],
+    llm_model,
+    llm_tokenizer,
+    verification_threshold: float = 0.8,
+    max_verify: int = 100,
+) -> Dict[str, List[str]]:
+    """
+    Enhance bilingual dictionary by verifying synonyms with LLM.
+
+    Args:
+        initial_dict: Initial bilingual dictionary (embedding-based)
+        llm_model: Loaded LLM model
+        llm_tokenizer: Loaded tokenizer
+        verification_threshold: Not used (kept for API compatibility)
+        max_verify: Maximum number of pairs to verify (for speed)
+
+    Returns:
+        Enhanced bilingual dictionary with verified synonyms
+
+    Example:
+        >>> enhanced = enhance_bilingual_dict_with_llm(
+        ...     initial_dict={'모델': ['model', 'madel']},  # 'madel' is typo
+        ...     llm_model=model,
+        ...     llm_tokenizer=tokenizer
+        ... )
+        >>> print(enhanced)  # {'모델': ['model']}  # 'madel' removed
+    """
+    print("\n" + "="*70)
+    print("🤖 LLM-based Bilingual Synonym Verification")
+    print("="*70)
+    print(f"Initial dictionary size: {len(initial_dict):,}")
+    print(f"Max pairs to verify: {max_verify}")
+
+    enhanced_dict = {}
+    verified_count = 0
+    rejected_count = 0
+
+    # Sort by number of synonyms (verify most important first)
+    sorted_items = sorted(
+        initial_dict.items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    )[:max_verify]
+
+    print(f"\n  Verifying {len(sorted_items)} terms...")
+
+    for term, synonyms in tqdm(sorted_items, desc="LLM verification"):
+        verified_synonyms = []
+
+        for synonym in synonyms:
+            try:
+                is_synonym, reason = verify_synonym_pair_with_llm(
+                    word1=term,
+                    word2=synonym,
+                    llm_model=llm_model,
+                    llm_tokenizer=llm_tokenizer,
+                )
+
+                if is_synonym:
+                    verified_synonyms.append(synonym)
+                    verified_count += 1
+                else:
+                    rejected_count += 1
+
+            except Exception as e:
+                print(f"\n⚠️  Error verifying {term} ↔ {synonym}: {e}")
+                # Keep original on error
+                verified_synonyms.append(synonym)
+
+        if verified_synonyms:
+            enhanced_dict[term] = verified_synonyms
+
+    # Add remaining unverified terms (keep as-is)
+    for term, synonyms in initial_dict.items():
+        if term not in enhanced_dict:
+            enhanced_dict[term] = synonyms
+
+    print("\n" + "="*70)
+    print("✅ LLM Verification Complete")
+    print("="*70)
+    print(f"Verified pairs: {verified_count:,}")
+    print(f"Rejected pairs: {rejected_count:,}")
+    print(f"Final dictionary size: {len(enhanced_dict):,}")
+
+    return enhanced_dict
+
+
+def discover_new_synonyms_with_llm(
+    seed_terms: List[str],
+    llm_model,
+    llm_tokenizer,
+    num_candidates_per_term: int = 5,
+) -> Dict[str, List[str]]:
+    """
+    Discover new synonym candidates using LLM.
+
+    Args:
+        seed_terms: List of seed terms to find synonyms for
+        llm_model: Loaded LLM model
+        llm_tokenizer: Loaded tokenizer
+        num_candidates_per_term: Number of synonyms to generate per term
+
+    Returns:
+        Dictionary mapping terms to discovered synonyms
+
+    Example:
+        >>> new_synonyms = discover_new_synonyms_with_llm(
+        ...     seed_terms=['검색', '모델'],
+        ...     llm_model=model,
+        ...     llm_tokenizer=tokenizer
+        ... )
+    """
+    from src.llm_loader import generate_text
+    import re
+
+    print("\n" + "="*70)
+    print("🔍 Discovering New Synonyms with LLM")
+    print("="*70)
+    print(f"Seed terms: {len(seed_terms)}")
+
+    discovered_synonyms = {}
+
+    for term in tqdm(seed_terms, desc="Discovering synonyms"):
+        prompt = f"""다음 단어와 같은 의미를 가지는 한국어 또는 영어 동의어를 {num_candidates_per_term}개 생성하세요.
+각 동의어는 한 줄에 하나씩 작성하세요.
+
+단어: {term}
+
+동의어 ({num_candidates_per_term}개):"""
+
+        try:
+            generated = generate_text(
+                model=llm_model,
+                tokenizer=llm_tokenizer,
+                prompt=prompt,
+                max_new_tokens=150,
+                temperature=0.7,
+            )
+
+            # Parse synonyms
+            synonyms = []
+            for line in generated.split('\n'):
+                line = line.strip()
+                # Remove numbering
+                line = re.sub(r'^[\d\-\*\•]+[\.\)]\s*', '', line)
+                line = line.strip()
+
+                if line and len(line) > 1:
+                    synonyms.append(line)
+
+            if synonyms:
+                discovered_synonyms[term] = synonyms[:num_candidates_per_term]
+
+        except Exception as e:
+            print(f"\n⚠️  Error discovering synonyms for {term}: {e}")
+
+    print(f"\n✓ Discovered synonyms for {len(discovered_synonyms)} terms")
+
+    return discovered_synonyms

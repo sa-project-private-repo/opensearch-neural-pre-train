@@ -55,3 +55,7 @@ hdbscan==0.8.38  # Advanced clustering (optional)
 
 # Configuration management
 pyyaml==6.0.2
+
+# LLM inference (ARM-compatible, Python 3.12)
+autoawq==0.2.7            # AWQ quantization for Qwen3 (ARM + Python 3.12)
+# llama-cpp-python==0.3.4  # Optional: gpt-oss-20b GGUF support (requires build)

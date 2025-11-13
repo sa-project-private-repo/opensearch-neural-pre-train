@@ -83,6 +83,10 @@ from src.cross_lingual_synonyms import (
     build_comprehensive_bilingual_dictionary,
     get_default_korean_english_pairs,
     apply_bilingual_synonyms_to_idf,
+    # LLM-based (v2)
+    verify_synonym_pair_with_llm,
+    enhance_bilingual_dict_with_llm,
+    discover_new_synonyms_with_llm,
 )
 
 __all__ = [
@@ -130,4 +134,8 @@ __all__ = [
     "build_comprehensive_bilingual_dictionary",
     "get_default_korean_english_pairs",
     "apply_bilingual_synonyms_to_idf",
+    # LLM-based (v2)
+    "verify_synonym_pair_with_llm",
+    "enhance_bilingual_dict_with_llm",
+    "discover_new_synonyms_with_llm",
 ]
