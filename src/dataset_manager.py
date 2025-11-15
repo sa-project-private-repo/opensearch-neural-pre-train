@@ -190,10 +190,10 @@ class DatasetManager:
         subdir: str = ""
     ) -> Path:
         """
-        PyTorch 모델 저장 (Hugging Face 형식)
+        PyTorch 모델 저장 (Hugging Face 및 일반 PyTorch 모델 지원)
 
         Args:
-            model: 저장할 모델
+            model: 저장할 모델 (Hugging Face 또는 일반 PyTorch 모델)
             tokenizer: 저장할 토크나이저
             model_dir: 모델 디렉토리명
             subdir: 하위 디렉토리 (선택)
@@ -201,12 +201,53 @@ class DatasetManager:
         Returns:
             저장된 모델 디렉토리 경로
         """
+        import torch
+        import json
+
         path = self.base_path / subdir / model_dir
         path.mkdir(parents=True, exist_ok=True)
 
-        # Save model and tokenizer
-        model.save_pretrained(path)
-        tokenizer.save_pretrained(path)
+        # Save model
+        if hasattr(model, 'save_pretrained'):
+            # Hugging Face 모델
+            model.save_pretrained(path)
+        else:
+            # 일반 PyTorch 모델
+            torch.save(model.state_dict(), path / "pytorch_model.bin")
+
+            # Config 저장 (모델 구조 정보)
+            config = {
+                "model_type": model.__class__.__name__,
+                "model_class": f"{model.__class__.__module__}.{model.__class__.__name__}",
+            }
+
+            # 모델에 config 속성이 있으면 추가
+            if hasattr(model, 'config'):
+                if hasattr(model.config, 'to_dict'):
+                    config.update(model.config.to_dict())
+                else:
+                    config['model_config'] = str(model.config)
+
+            # vocab_size 등 기본 속성 저장
+            if hasattr(model, 'vocab_size'):
+                config['vocab_size'] = model.vocab_size
+
+            # BERT 기반 모델의 경우 base model 정보 저장
+            if hasattr(model, 'bert'):
+                if hasattr(model.bert, 'config'):
+                    config['base_model_name'] = model.bert.config.name_or_path if hasattr(model.bert.config, 'name_or_path') else 'unknown'
+
+            with open(path / "config.json", 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+        # Save tokenizer
+        if hasattr(tokenizer, 'save_pretrained'):
+            tokenizer.save_pretrained(path)
+        else:
+            # 일반 토크나이저인 경우 pickle로 저장
+            import pickle
+            with open(path / "tokenizer.pkl", 'wb') as f:
+                pickle.dump(tokenizer, f)
 
         print(f"✓ Saved Model: {path}")
 
@@ -223,15 +264,17 @@ class DatasetManager:
         self,
         model_class,
         model_dir: str,
-        subdir: str = ""
+        subdir: str = "",
+        device: str = "cpu"
     ) -> Tuple[Any, Any]:
         """
-        PyTorch 모델 로드 (Hugging Face 형식)
+        PyTorch 모델 로드 (Hugging Face 및 일반 PyTorch 모델 지원)
 
         Args:
             model_class: 모델 클래스 (예: OpenSearchSparseEncoder)
             model_dir: 모델 디렉토리명
             subdir: 하위 디렉토리 (선택)
+            device: 로드할 디바이스 ("cpu", "cuda", etc.)
 
         Returns:
             (model, tokenizer) 튜플
@@ -239,15 +282,66 @@ class DatasetManager:
         Raises:
             FileNotFoundError: 모델이 존재하지 않을 때
         """
+        import torch
+        import json
+
         path = self.base_path / subdir / model_dir
 
         if not path.exists():
             raise FileNotFoundError(f"Model not found: {path}")
 
-        from transformers import AutoTokenizer
+        # Load model
+        if hasattr(model_class, 'from_pretrained'):
+            # Hugging Face 모델
+            model = model_class.from_pretrained(path)
+        else:
+            # 일반 PyTorch 모델
+            # Config 로드
+            config_path = path / "config.json"
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                # Config에서 필요한 인자를 추출하여 모델 초기화
+                try:
+                    # base_model_name이 있으면 전달 (OpenSearchDocEncoder 등)
+                    if 'base_model_name' in config:
+                        model = model_class(model_name=config['base_model_name'])
+                    # vocab_size만 있는 경우
+                    elif 'vocab_size' in config:
+                        model = model_class(vocab_size=config['vocab_size'])
+                    else:
+                        model = model_class()
+                except TypeError as e:
+                    # 인자가 맞지 않으면 기본 초기화 시도
+                    print(f"⚠️  Failed to initialize with config: {e}")
+                    print(f"   Trying default initialization...")
+                    model = model_class()
+            else:
+                # Config 없으면 기본 초기화
+                model = model_class()
 
-        model = model_class.from_pretrained(path)
-        tokenizer = AutoTokenizer.from_pretrained(path)
+            # State dict 로드
+            model_path = path / "pytorch_model.bin"
+            if model_path.exists():
+                state_dict = torch.load(model_path, map_location=device)
+                model.load_state_dict(state_dict)
+                model.to(device)
+            else:
+                raise FileNotFoundError(f"Model weights not found: {model_path}")
+
+        # Load tokenizer
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(path)
+        except Exception:
+            # Pickle로 저장된 토크나이저 로드
+            import pickle
+            tokenizer_path = path / "tokenizer.pkl"
+            if tokenizer_path.exists():
+                with open(tokenizer_path, 'rb') as f:
+                    tokenizer = pickle.load(f)
+            else:
+                raise FileNotFoundError(f"Tokenizer not found in {path}")
 
         print(f"✓ Loaded Model: {path}")
         return model, tokenizer

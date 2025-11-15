@@ -5,22 +5,22 @@
     "base_model/documents.json": {
       "type": "json",
       "size_bytes": 50958389,
-      "updated_at": "2025-11-15T17:18:42.547747"
+      "updated_at": "2025-11-15T17:48:37.772842"
     },
     "base_model/idf_statistics.pkl": {
       "type": "pickle",
       "size_bytes": 350803,
-      "updated_at": "2025-11-15T17:18:42.806174"
+      "updated_at": "2025-11-15T17:48:37.812673"
     },
     "base_model/qd_pairs_base.pkl": {
       "type": "pickle",
-      "size_bytes": 30613110,
-      "updated_at": "2025-11-15T17:18:43.673631"
+      "size_bytes": 30617254,
+      "updated_at": "2025-11-15T17:48:37.896136"
     },
     "base_model/bilingual_synonyms.json": {
       "type": "json",
       "size_bytes": 1619,
-      "updated_at": "2025-11-15T17:18:44.152464"
+      "updated_at": "2025-11-15T17:48:37.927655"
     }
   }
 }
