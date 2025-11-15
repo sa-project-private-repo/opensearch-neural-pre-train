@@ -106,12 +106,25 @@ def load_qwen3_awq(
         Using FP8 quantization instead, which is natively supported by Transformers.
         FP8 provides good compression (~30GB) while maintaining high quality.
     """
+    # Detect model type from name
+    is_fp8 = "FP8" in model_name
+    is_bf16 = not is_fp8 and ("Instruct" in model_name or "Thinking" in model_name.replace("-FP8", ""))
+
     print("\n" + "="*70)
-    print(f"📥 Loading Qwen3 Model (FP8 Quantization)")
+    if is_fp8:
+        print(f"📥 Loading Qwen Model (FP8 Quantization)")
+    elif is_bf16:
+        print(f"📥 Loading Qwen Model (BF16 Precision)")
+    else:
+        print(f"📥 Loading Qwen Model")
     print("="*70)
     print(f"Model: {model_name}")
     print(f"Device map: {device_map}")
-    print(f"💡 Using FP8 quantization (ARM aarch64 compatible)")
+
+    if is_fp8:
+        print(f"💡 Using FP8 quantization (ARM aarch64 compatible)")
+    elif is_bf16:
+        print(f"💡 Using BF16 precision (pure PyTorch, no Triton)")
 
     # Load tokenizer
     print("\n1️⃣ Loading tokenizer...")
@@ -121,9 +134,12 @@ def load_qwen3_awq(
     )
     print(f"✓ Tokenizer loaded (vocab size: {len(tokenizer):,})")
 
-    # Load model with FP8 quantization (Transformers native support)
-    print("\n2️⃣ Loading model with FP8 quantization...")
-    print("   Using Transformers native FP8 support (no external deps needed)")
+    # Load model
+    print("\n2️⃣ Loading model...")
+    if is_fp8:
+        print("   Using Transformers native FP8 support (no external deps needed)")
+    elif is_bf16:
+        print("   Using BF16 precision for stable inference")
     print("   This may take a few minutes...")
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -131,7 +147,7 @@ def load_qwen3_awq(
         device_map=device_map,
         low_cpu_mem_usage=low_cpu_mem_usage,
         trust_remote_code=True,
-        # Transformers 4.57+ has native AWQ support, no AutoAWQ needed
+        torch_dtype=torch.bfloat16 if is_bf16 else None,  # Explicit BF16 for non-FP8 models
     )
 
     print(f"✓ Model loaded")
@@ -142,7 +158,7 @@ def load_qwen3_awq(
         print(f"\n📊 GPU Memory after loading: {allocated:.2f} GB")
 
     print("\n" + "="*70)
-    print("✅ Qwen3 Model Ready!")
+    print("✅ Model Ready!")
     print("="*70)
 
     return model, tokenizer
