@@ -1,5 +1,26 @@
 {
   "version": "1.0.0",
   "created_at": "2025-11-15T03:29:09.128429",
-  "datasets": {}
+  "datasets": {
+    "base_model/documents.json": {
+      "type": "json",
+      "size_bytes": 50958389,
+      "updated_at": "2025-11-15T17:18:42.547747"
+    },
+    "base_model/idf_statistics.pkl": {
+      "type": "pickle",
+      "size_bytes": 350803,
+      "updated_at": "2025-11-15T17:18:42.806174"
+    },
+    "base_model/qd_pairs_base.pkl": {
+      "type": "pickle",
+      "size_bytes": 30613110,
+      "updated_at": "2025-11-15T17:18:43.673631"
+    },
+    "base_model/bilingual_synonyms.json": {
+      "type": "json",
+      "size_bytes": 1619,
+      "updated_at": "2025-11-15T17:18:44.152464"
+    }
+  }
 }
