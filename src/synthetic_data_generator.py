@@ -42,6 +42,7 @@ def generate_queries_from_document(
     num_queries: int = 3,
     max_new_tokens: int = 150,
     temperature: float = 0.8,
+    verbose: bool = False,
 ) -> List[str]:
     """
     Generate queries from a document using LLM.
@@ -53,6 +54,7 @@ def generate_queries_from_document(
         num_queries: Number of queries to generate
         max_new_tokens: Max tokens in generation
         temperature: Sampling temperature
+        verbose: Print detailed logs
 
     Returns:
         List of generated queries
@@ -62,17 +64,26 @@ def generate_queries_from_document(
         >>> queries = generate_queries_from_document(doc, model, tokenizer)
         >>> print(queries)  # ["OpenSearch 기능", "검색 엔진 비교", ...]
     """
+    import time
     from src.llm_loader import generate_text
 
     # Truncate long documents
     doc_truncated = document[:500]  # First 500 chars
+
+    if verbose:
+        print(f"      🔹 Document length: {len(document)} chars (truncated to {len(doc_truncated)})")
 
     prompt = DOC_TO_QUERY_PROMPT.format(
         document=doc_truncated,
         num_queries=num_queries,
     )
 
+    if verbose:
+        print(f"      🔹 Prompt length: {len(prompt)} chars")
+        print(f"      🔹 Sending to LLM (max_tokens={max_new_tokens}, temp={temperature})...")
+
     # Generate
+    start_time = time.time()
     generated = generate_text(
         model=llm_model,
         tokenizer=llm_tokenizer,
@@ -81,6 +92,11 @@ def generate_queries_from_document(
         temperature=temperature,
         do_sample=True,
     )
+    gen_time = time.time() - start_time
+
+    if verbose:
+        print(f"      🔹 LLM generation completed in {gen_time:.2f}s")
+        print(f"      🔹 Raw output length: {len(generated)} chars")
 
     # Parse queries (each line)
     queries = []
@@ -92,6 +108,9 @@ def generate_queries_from_document(
 
         if line and len(line) > 5:  # Min length
             queries.append(line)
+
+    if verbose:
+        print(f"      🔹 Parsed {len(queries)} queries from output")
 
     return queries[:num_queries]  # Limit to requested number
 
@@ -211,6 +230,7 @@ def generate_synthetic_qd_pairs(
     batch_size: int = 2,
     max_documents: Optional[int] = None,
     enable_filtering: bool = True,
+    verbose: bool = True,
 ) -> List[Tuple[str, str, float]]:
     """
     Generate synthetic query-document pairs from documents.
@@ -223,6 +243,7 @@ def generate_synthetic_qd_pairs(
         batch_size: Batch size for processing (not used in current impl)
         max_documents: Maximum documents to process (None = all)
         enable_filtering: Whether to apply quality filtering
+        verbose: Print detailed progress logs
 
     Returns:
         List of (query, document, relevance) tuples
@@ -232,49 +253,120 @@ def generate_synthetic_qd_pairs(
         >>> pairs = generate_synthetic_qd_pairs(docs, model, tokenizer)
         >>> print(len(pairs))  # 6 (3 queries × 2 docs)
     """
+    import time
+    from datetime import datetime
+
     if max_documents is not None:
         documents = documents[:max_documents]
 
     print("\n" + "="*70)
     print("📝 Generating Synthetic Query-Document Pairs")
     print("="*70)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Documents: {len(documents)}")
     print(f"Queries per doc: {num_queries_per_doc}")
+    print(f"Expected total queries: {len(documents) * num_queries_per_doc}")
     print(f"Quality filtering: {'ON' if enable_filtering else 'OFF'}")
+    print(f"Verbose logging: {'ON' if verbose else 'OFF'}")
+    print("="*70)
 
     synthetic_pairs = []
     failed_count = 0
+    filtered_count = 0
+    total_generation_time = 0
 
-    for doc in tqdm(documents, desc="Generating queries"):
+    # Progress tracking
+    start_time = time.time()
+    last_report_time = start_time
+
+    for i, doc in enumerate(tqdm(documents, desc="Generating queries", ncols=100)):
+        doc_start_time = time.time()
+
+        if verbose and i % 10 == 0:
+            # Report every 10 documents
+            elapsed = time.time() - start_time
+            avg_time_per_doc = elapsed / (i + 1) if i > 0 else 0
+            eta = avg_time_per_doc * (len(documents) - i - 1)
+
+            print(f"\n{'='*70}")
+            print(f"📊 Progress Report - Document {i+1}/{len(documents)}")
+            print(f"{'='*70}")
+            print(f"⏱️  Elapsed: {elapsed/60:.1f}m | ETA: {eta/60:.1f}m")
+            print(f"✅ Generated: {len(synthetic_pairs)} pairs")
+            print(f"❌ Failed/Filtered: {failed_count + filtered_count}")
+            print(f"⚡ Avg time/doc: {avg_time_per_doc:.2f}s")
+            print(f"{'='*70}")
+
         try:
+            if verbose:
+                print(f"\n📄 Doc {i+1}: {doc[:80]}...")
+                print(f"   🤖 Calling LLM...")
+
+            # Generate queries
+            query_gen_start = time.time()
             queries = generate_queries_from_document(
                 document=doc,
                 llm_model=llm_model,
                 llm_tokenizer=llm_tokenizer,
                 num_queries=num_queries_per_doc,
             )
+            query_gen_time = time.time() - query_gen_start
+            total_generation_time += query_gen_time
 
+            if verbose:
+                print(f"   ✅ LLM responded in {query_gen_time:.2f}s")
+                print(f"   📝 Generated {len(queries)} queries:")
+                for j, q in enumerate(queries, 1):
+                    print(f"      {j}. {q}")
+
+            # Filter and add queries
+            added_for_this_doc = 0
             for query in queries:
                 # Quality filtering
                 if enable_filtering:
                     if not filter_quality(query, doc):
-                        failed_count += 1
+                        filtered_count += 1
+                        if verbose:
+                            print(f"      ⚠️  Filtered: {query[:50]}...")
                         continue
 
                 # Add positive pair
                 synthetic_pairs.append((query, doc, 1.0))
+                added_for_this_doc += 1
+
+            if verbose:
+                print(f"   ➕ Added {added_for_this_doc} pairs")
 
         except Exception as e:
-            print(f"\n⚠️  Error generating queries: {e}")
             failed_count += 1
+            print(f"\n❌ Error on doc {i+1}: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
             continue
+
+        doc_time = time.time() - doc_start_time
+        if verbose:
+            print(f"   ⏱️  Total time for this doc: {doc_time:.2f}s")
+
+    # Final report
+    total_time = time.time() - start_time
 
     print("\n" + "="*70)
     print("✅ Generation Complete")
     print("="*70)
-    print(f"Total pairs generated: {len(synthetic_pairs):,}")
-    print(f"Failed/filtered: {failed_count:,}")
-    print(f"Average queries per doc: {len(synthetic_pairs) / len(documents):.2f}")
+    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total time: {total_time/60:.2f} minutes")
+    print(f"Avg time per doc: {total_time/len(documents):.2f}s")
+    print(f"Avg LLM generation time: {total_generation_time/len(documents):.2f}s")
+    print()
+    print(f"📊 Results:")
+    print(f"  Total pairs generated: {len(synthetic_pairs):,}")
+    print(f"  Failed: {failed_count:,}")
+    print(f"  Filtered: {filtered_count:,}")
+    print(f"  Success rate: {len(synthetic_pairs)/(len(documents)*num_queries_per_doc)*100:.1f}%")
+    print(f"  Average queries per doc: {len(synthetic_pairs) / len(documents):.2f}")
+    print("="*70)
 
     return synthetic_pairs
 
