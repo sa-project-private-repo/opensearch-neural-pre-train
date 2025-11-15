@@ -21,6 +21,11 @@
       "type": "json",
       "size_bytes": 1619,
       "updated_at": "2025-11-15T17:48:37.927655"
+    },
+    "base_model/neural_sparse_v1_model": {
+      "type": "pytorch_model",
+      "size_bytes": 443694629,
+      "updated_at": "2025-11-15T18:02:42.825719"
     }
   }
 }
