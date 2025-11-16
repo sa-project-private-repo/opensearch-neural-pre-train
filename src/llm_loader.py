@@ -72,6 +72,7 @@ class OllamaModel:
         temperature: float = 0.7,
         top_p: float = 0.9,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
     ) -> str:
         """
         Generate text using Ollama model.
@@ -82,33 +83,73 @@ class OllamaModel:
             temperature: Sampling temperature
             top_p: Nucleus sampling threshold
             stream: Whether to stream the response
+            system_prompt: Optional system prompt for better control
 
         Returns:
             Generated text
         """
-        response = self.client.generate(
-            model=self.model_name,
-            prompt=prompt,
-            stream=stream,
-            options={
-                "num_predict": max_new_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-            }
-        )
+        # Use chat API if system prompt provided (better for thinking models)
+        if system_prompt:
+            response = self.client.chat(
+                model=self.model_name,
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': prompt}
+                ],
+                stream=stream,
+                options={
+                    "num_predict": max_new_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                }
+            )
 
-        if stream:
-            # For streaming, collect all chunks
-            text = ""
-            for chunk in response:
-                # Try both 'response' and 'thinking' fields
-                text += getattr(chunk, 'response', '') or getattr(chunk, 'thinking', '')
-            return text
+            if stream:
+                text = ""
+                for chunk in response:
+                    text += chunk.get('message', {}).get('content', '')
+                return text
+            else:
+                # Extract message (could be dict or object)
+                message = response.get('message') if isinstance(response, dict) else getattr(response, 'message', None)
+                if message:
+                    # Try to get content and thinking from message
+                    if isinstance(message, dict):
+                        content = message.get('content', '')
+                        thinking = message.get('thinking', '')
+                    else:
+                        content = getattr(message, 'content', '')
+                        thinking = getattr(message, 'thinking', '')
+
+                    # For thinking models, combine thinking + content
+                    # (but content is usually what we want)
+                    return content if content else thinking
+                return ''
         else:
-            # For thinking models, the output might be in 'thinking' field
-            # Try 'response' first, fallback to 'thinking'
-            result = getattr(response, 'response', '') or getattr(response, 'thinking', '')
-            return result
+            # Use generate API
+            response = self.client.generate(
+                model=self.model_name,
+                prompt=prompt,
+                stream=stream,
+                options={
+                    "num_predict": max_new_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                }
+            )
+
+            if stream:
+                # For streaming, collect all chunks
+                text = ""
+                for chunk in response:
+                    # Try both 'response' and 'thinking' fields
+                    text += getattr(chunk, 'response', '') or getattr(chunk, 'thinking', '')
+                return text
+            else:
+                # For thinking models, the output might be in 'thinking' field
+                # Try 'response' first, fallback to 'thinking'
+                result = getattr(response, 'response', '') or getattr(response, 'thinking', '')
+                return result
 
 
 class OllamaTokenizer:
@@ -338,6 +379,7 @@ def generate_text(
     temperature: float = 0.7,
     top_p: float = 0.9,
     do_sample: bool = True,
+    system_prompt: Optional[str] = None,
 ) -> str:
     """
     Generate text using Qwen3 model or Ollama model.
@@ -350,6 +392,7 @@ def generate_text(
         temperature: Sampling temperature (0.0 = deterministic)
         top_p: Nucleus sampling threshold
         do_sample: Whether to use sampling (False = greedy)
+        system_prompt: System prompt for Ollama chat API (thinking models)
 
     Returns:
         Generated text (without prompt)
@@ -365,6 +408,7 @@ def generate_text(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
+            system_prompt=system_prompt,
         )
 
     # HuggingFace model path - requires tokenizer

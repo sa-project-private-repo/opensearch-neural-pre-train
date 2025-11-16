@@ -21,20 +21,34 @@ from tqdm import tqdm
 
 
 # Prompt templates
-DOC_TO_QUERY_PROMPT = """다음 문서를 읽고 사용자가 이 문서를 찾기 위해 검색할 만한 쿼리를 {num_queries}개 생성하세요.
-각 쿼리는 짧고 구체적이어야 합니다 (5-15단어).
-**중요: 쿼리는 반드시 한국어로 작성해야 합니다.**
+DOC_TO_QUERY_PROMPT = """다음 문서를 읽고 사용자가 이 문서를 찾기 위해 검색할 만한 한국어 검색 쿼리를 {num_queries}개 생성하세요.
 
 문서: {document}
 
-검색 쿼리 ({num_queries}개, 각 줄에 하나씩, 한국어로):"""
+**출력 형식 (반드시 아래 형식으로만 답변):**
+1. [한국어 쿼리]
+2. [한국어 쿼리]
+3. [한국어 쿼리]
+
+**예시:**
+문서: "파이썬은 인기있는 프로그래밍 언어입니다. 웹 개발과 데이터 분석에 사용됩니다."
+출력:
+1. 파이썬 프로그래밍 언어 특징
+2. 파이썬 웹 개발 활용
+3. 파이썬 데이터 분석 도구
+
+이제 위 문서에 대한 {num_queries}개의 한국어 검색 쿼리를 생성하세요:"""
 
 QUERY_AUGMENT_PROMPT = """다음 검색 쿼리와 같은 의미를 가지지만 표현이 다른 쿼리를 {num_variants}개 생성하세요.
-**중요: 변형 쿼리는 반드시 한국어로 작성해야 합니다.**
+
+**중요 규칙:**
+1. 변형 쿼리는 반드시 한국어로만 작성
+2. 각 줄에 하나씩
+3. 번호나 설명 없이 쿼리만 작성
 
 원본 쿼리: {query}
 
-변형 쿼리 ({num_variants}개, 각 줄에 하나씩, 한국어로):"""
+변형 쿼리 (한국어 {num_variants}개):"""
 
 
 def generate_queries_from_document(
@@ -42,8 +56,8 @@ def generate_queries_from_document(
     llm_model: Any,
     llm_tokenizer: Any,
     num_queries: int = 3,
-    max_new_tokens: int = 150,
-    temperature: float = 0.8,
+    max_new_tokens: int = 500,
+    temperature: float = 0.3,
     verbose: bool = False,
 ) -> List[str]:
     """
@@ -86,6 +100,13 @@ def generate_queries_from_document(
 
     # Generate
     start_time = time.time()
+
+    # System prompt for Ollama models (helps with thinking models)
+    system_prompt = """당신은 한국어 검색 쿼리 생성 전문가입니다.
+사용자가 제공한 문서를 읽고 검색 쿼리만 출력하세요.
+절대 영어로 답변하지 마세요. 오직 한국어만 사용하세요.
+설명이나 생각 과정은 출력하지 말고, 쿼리만 출력하세요."""
+
     generated = generate_text(
         model=llm_model,
         tokenizer=llm_tokenizer,
@@ -93,6 +114,7 @@ def generate_queries_from_document(
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         do_sample=True,
+        system_prompt=system_prompt,
     )
     gen_time = time.time() - start_time
 
@@ -109,7 +131,43 @@ def generate_queries_from_document(
         line = line.strip()
 
         if line and len(line) > 5:  # Min length
-            queries.append(line)
+            # Extract Korean queries from various formats
+            korean_queries = []
+
+            # Format 1: Quoted text "Korean query" or 'Korean query'
+            quoted_matches = re.findall(r'["\']([^"\']+)["\']', line)
+            for match in quoted_matches:
+                if any('\uac00' <= c <= '\ud7a3' for c in match):
+                    korean_queries.append(match)
+
+            # Format 2: Text after colon : Korean query
+            if ':' in line:
+                after_colon = line.split(':', 1)[1].strip()
+                # Remove quotes if present
+                after_colon = after_colon.strip('"\'')
+                if any('\uac00' <= c <= '\ud7a3' for c in after_colon):
+                    # Split by 'or' or '또는' to get multiple queries
+                    for part in re.split(r'\s+or\s+|\s+또는\s+', after_colon):
+                        part = part.strip().strip('"\'.,')
+                        if any('\uac00' <= c <= '\ud7a3' for c in part):
+                            korean_queries.append(part)
+
+            # Format 3: Pure Korean line (no English thinking)
+            has_korean = any('\uac00' <= c <= '\ud7a3' for c in line)
+            thinking_phrases = [
+                'okay', 'let me', 'first', 'i need', 'i should', 'the user',
+                'wait', 'maybe', 'now', 'here', 'next', 'key points', 'about'
+            ]
+            is_thinking = any(phrase in line.lower() for phrase in thinking_phrases)
+
+            if has_korean and not is_thinking and not korean_queries:
+                # Remove any remaining quotes or punctuation
+                clean_line = line.strip('"\'.,;:')
+                if clean_line:
+                    korean_queries.append(clean_line)
+
+            # Add all extracted queries
+            queries.extend(korean_queries)
 
     if verbose:
         print(f"      🔹 Parsed {len(queries)} queries from output")
