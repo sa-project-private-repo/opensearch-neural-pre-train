@@ -1,0 +1,127 @@
+{
+  "학습": [
+    "training",
+    "train"
+  ],
+  "쿼리": [
+    "Query"
+  ],
+  "분석": [
+    "analysis",
+    "analyze"
+  ],
+  "트랜스포머": [
+    "transformer"
+  ],
+  "최적화": [
+    "optimize"
+  ],
+  "희소": [
+    "Sparse"
+  ],
+  "시스템": [
+    "System"
+  ],
+  "기술": [
+    "technology"
+  ],
+  "모델": [
+    "model",
+    "Model"
+  ],
+  "검색": [
+    "search",
+    "retrieval",
+    "retrieve"
+  ],
+  "데이터": [
+    "data",
+    "Data"
+  ],
+  "알고리즘": [
+    "algorithm",
+    "Algorithm"
+  ],
+  "신경망": [
+    "network",
+    "neural network",
+    "net"
+  ],
+  "벡터": [
+    "vector",
+    "Vector"
+  ],
+  "임베딩": [
+    "embedding",
+    "Embedding"
+  ],
+  "토큰": [
+    "token",
+    "Token"
+  ],
+  "문서": [
+    "document",
+    "doc",
+    "Document"
+  ],
+  "언어": [
+    "language",
+    "Language"
+  ],
+  "처리": [
+    "processing",
+    "process"
+  ],
+  "어텐션": [
+    "attention",
+    "Attention"
+  ],
+  "인코더": [
+    "encoder",
+    "Encoder"
+  ],
+  "디코더": [
+    "decoder",
+    "Decoder"
+  ],
+  "손실": [
+    "loss",
+    "Loss"
+  ],
+  "배치": [
+    "batch",
+    "Batch"
+  ],
+  "에포크": [
+    "epoch",
+    "Epoch"
+  ],
+  "버트": [
+    "bert",
+    "BERT"
+  ],
+  "지피티": [
+    "gpt",
+    "GPT"
+  ],
+  "밀집": [
+    "dense",
+    "Dense"
+  ],
+  "랭킹": [
+    "ranking",
+    "rank"
+  ],
+  "스코어": [
+    "score",
+    "Score"
+  ],
+  "방법": [
+    "method",
+    "approach"
+  ],
+  "성능": [
+    "performance",
+    "perf"
+  ]
+}

@@ -26,6 +26,16 @@
       "type": "pytorch_model",
       "size_bytes": 443694629,
       "updated_at": "2025-11-15T18:02:42.825719"
+    },
+    "llm_generated/synthetic_qd_pairs.pkl": {
+      "type": "pickle",
+      "size_bytes": 3628,
+      "updated_at": "2025-11-16T17:20:30.919410"
+    },
+    "llm_generated/enhanced_synonyms.json": {
+      "type": "json",
+      "size_bytes": 1511,
+      "updated_at": "2025-11-16T17:20:32.329783"
     }
   }
 }
