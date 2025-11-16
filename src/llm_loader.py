@@ -9,6 +9,7 @@ Supported models:
 - Qwen2.5-14B-Instruct-AWQ (4-bit, ~4GB)
 - Qwen2.5-7B-Instruct-AWQ (4-bit, ~2GB)
 - gpt-oss-20b (GGUF Q4, ~5GB) - requires llama-cpp-python
+- Ollama models (local server) - Zero setup, efficient
 
 Requirements:
 - Python 3.12
@@ -16,6 +17,7 @@ Requirements:
 - transformers==4.46.3
 - accelerate==1.1.1
 - llama-cpp-python==0.3.4 (optional, for gpt-oss-20b)
+- ollama==0.6.1 (optional, for ollama models)
 """
 
 from typing import Tuple, Optional, Dict, Any
@@ -230,11 +232,11 @@ def generate_text(
     do_sample: bool = True,
 ) -> str:
     """
-    Generate text using Qwen3 model.
+    Generate text using Qwen3 model or Ollama model.
 
     Args:
-        model: Loaded model
-        tokenizer: Loaded tokenizer
+        model: Loaded model (HuggingFace or OllamaModel)
+        tokenizer: Loaded tokenizer (or OllamaTokenizer)
         prompt: Input prompt
         max_new_tokens: Maximum tokens to generate
         temperature: Sampling temperature (0.0 = deterministic)
@@ -248,6 +250,16 @@ def generate_text(
         >>> text = generate_text(model, tokenizer, "Translate to English: 안녕하세요")
         >>> print(text)
     """
+    # Check if this is an OllamaModel
+    if isinstance(model, OllamaModel):
+        return model.generate(
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+
+    # HuggingFace model path
     inputs = tokenizer(prompt, return_tensors="pt")
 
     if torch.cuda.is_available():
@@ -358,6 +370,218 @@ SYNONYM_VERIFICATION_PROMPT = """다음 두 단어가 같은 의미를 가지거
 """
 
 
+# ============================================================================
+# Ollama Integration
+# ============================================================================
+
+class OllamaModel:
+    """
+    Wrapper class for Ollama models to provide compatible interface.
+
+    This class wraps an ollama.Client to provide the same interface
+    as HuggingFace models used in this module.
+
+    Attributes:
+        client: Ollama client instance
+        model_name: Name of the ollama model
+
+    Example:
+        >>> model = OllamaModel("qwen3:30b-a3b-thinking-2507-fp16")
+        >>> response = model.generate("Hello, how are you?")
+    """
+
+    def __init__(self, model_name: str, host: str = "http://localhost:11434"):
+        """
+        Initialize Ollama model wrapper.
+
+        Args:
+            model_name: Name of the ollama model (e.g., "qwen3:30b")
+            host: Ollama server URL
+        """
+        try:
+            import ollama
+        except ImportError:
+            raise ImportError(
+                "ollama not installed. Install with:\n"
+                "pip install ollama"
+            )
+
+        self.model_name = model_name
+        self.host = host
+        self.client = ollama.Client(host=host)
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        stream: bool = False,
+    ) -> str:
+        """
+        Generate text using Ollama model.
+
+        Args:
+            prompt: Input prompt
+            max_new_tokens: Maximum tokens to generate (mapped to num_predict)
+            temperature: Sampling temperature
+            top_p: Nucleus sampling threshold
+            stream: Whether to stream the response
+
+        Returns:
+            Generated text
+        """
+        response = self.client.generate(
+            model=self.model_name,
+            prompt=prompt,
+            stream=stream,
+            options={
+                "num_predict": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+        )
+
+        if stream:
+            # For streaming, collect all chunks
+            text = ""
+            for chunk in response:
+                text += chunk.get("response", "")
+            return text
+        else:
+            return response.get("response", "")
+
+
+class OllamaTokenizer:
+    """
+    Dummy tokenizer for Ollama models to maintain interface compatibility.
+
+    Ollama handles tokenization internally, so this is just a placeholder
+    to maintain compatibility with code expecting a tokenizer object.
+    """
+
+    def __init__(self):
+        self.eos_token = "</s>"
+        self.pad_token = "<pad>"
+        self.eos_token_id = 0
+
+    def __len__(self):
+        """Return arbitrary vocab size."""
+        return 100000
+
+
+def load_ollama_model(
+    model_name: str = "qwen3:30b-a3b-thinking-2507-fp16",
+    host: str = "http://localhost:11434",
+) -> Tuple[OllamaModel, OllamaTokenizer]:
+    """
+    Load an Ollama model running on local server.
+
+    Args:
+        model_name: Name of the ollama model
+        host: Ollama server URL (default: http://localhost:11434)
+
+    Returns:
+        Tuple of (OllamaModel, OllamaTokenizer)
+
+    Example:
+        >>> model, tokenizer = load_ollama_model("qwen3:30b")
+        >>> text = generate_text(model, tokenizer, "Hello!")
+
+    Note:
+        - Requires ollama to be running (`ollama serve`)
+        - Model must be pulled first (`ollama pull <model>`)
+        - Zero GPU setup needed, ollama handles everything
+    """
+    print("\n" + "="*70)
+    print("📥 Loading Ollama Model")
+    print("="*70)
+    print(f"Model: {model_name}")
+    print(f"Host: {host}")
+    print("💡 Using Ollama (local server, zero setup)")
+
+    # Check if ollama is available
+    try:
+        import ollama
+    except ImportError:
+        raise ImportError(
+            "ollama not installed. Install with:\n"
+            "pip install ollama"
+        )
+
+    # Try to connect and verify model exists
+    print("\n1️⃣ Connecting to Ollama server...")
+    try:
+        client = ollama.Client(host=host)
+        models = client.list()
+        model_names = [m["name"] for m in models.get("models", [])]
+
+        if model_name not in model_names:
+            print(f"⚠️  Warning: Model '{model_name}' not found in ollama")
+            print(f"   Available models: {', '.join(model_names)}")
+            print(f"\n   To pull the model, run:")
+            print(f"   ollama pull {model_name}")
+            raise ValueError(f"Model {model_name} not available")
+
+        print(f"✓ Connected to Ollama server")
+        print(f"✓ Model '{model_name}' is available")
+
+    except Exception as e:
+        print(f"❌ Failed to connect to Ollama server at {host}")
+        print(f"   Error: {e}")
+        print(f"\n   Make sure Ollama is running:")
+        print(f"   ollama serve")
+        raise
+
+    # Create model wrapper
+    print("\n2️⃣ Creating model wrapper...")
+    model = OllamaModel(model_name=model_name, host=host)
+    tokenizer = OllamaTokenizer()
+
+    print(f"✓ Model wrapper created")
+
+    print("\n" + "="*70)
+    print("✅ Ollama Model Ready!")
+    print("="*70)
+    print("📊 Model uses Ollama server (no GPU memory tracked here)")
+    print("    View Ollama logs for resource usage")
+    print("="*70)
+
+    return model, tokenizer
+
+
+def generate_text_ollama(
+    model: OllamaModel,
+    prompt: str,
+    max_new_tokens: int = 256,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+) -> str:
+    """
+    Generate text using Ollama model.
+
+    Args:
+        model: OllamaModel instance
+        prompt: Input prompt
+        max_new_tokens: Maximum tokens to generate
+        temperature: Sampling temperature
+        top_p: Nucleus sampling threshold
+
+    Returns:
+        Generated text
+
+    Example:
+        >>> model, _ = load_ollama_model()
+        >>> text = generate_text_ollama(model, "Hello!")
+    """
+    return model.generate(
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+    )
+
+
 if __name__ == "__main__":
     # Test GPU memory check
     check_gpu_memory()
@@ -368,4 +592,8 @@ if __name__ == "__main__":
     print("\nTo use:")
     print("  from src.llm_loader import load_qwen3_awq, generate_text")
     print("  model, tokenizer = load_qwen3_awq()")
+    print("  text = generate_text(model, tokenizer, 'Hello!')")
+    print("\nTo use Ollama:")
+    print("  from src.llm_loader import load_ollama_model, generate_text")
+    print("  model, tokenizer = load_ollama_model('qwen3:30b')")
     print("  text = generate_text(model, tokenizer, 'Hello!')")
