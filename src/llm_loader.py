@@ -25,6 +25,114 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+# ============================================================================
+# Ollama Model Classes (defined early for isinstance checks)
+# ============================================================================
+
+class OllamaModel:
+    """
+    Wrapper class for Ollama models to provide compatible interface.
+
+    This class wraps an ollama.Client to provide the same interface
+    as HuggingFace models used in this module.
+
+    Attributes:
+        client: Ollama client instance
+        model_name: Name of the ollama model
+
+    Example:
+        >>> model = OllamaModel("qwen3:30b-a3b-thinking-2507-fp16")
+        >>> response = model.generate("Hello, how are you?")
+    """
+
+    def __init__(self, model_name: str, host: str = "http://localhost:11434"):
+        """
+        Initialize Ollama model wrapper.
+
+        Args:
+            model_name: Name of the ollama model (e.g., "qwen3:30b")
+            host: Ollama server URL
+        """
+        try:
+            import ollama
+        except ImportError:
+            raise ImportError(
+                "ollama not installed. Install with:\n"
+                "pip install ollama"
+            )
+
+        self.model_name = model_name
+        self.host = host
+        self.client = ollama.Client(host=host)
+
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        stream: bool = False,
+    ) -> str:
+        """
+        Generate text using Ollama model.
+
+        Args:
+            prompt: Input prompt
+            max_new_tokens: Maximum tokens to generate (mapped to num_predict)
+            temperature: Sampling temperature
+            top_p: Nucleus sampling threshold
+            stream: Whether to stream the response
+
+        Returns:
+            Generated text
+        """
+        response = self.client.generate(
+            model=self.model_name,
+            prompt=prompt,
+            stream=stream,
+            options={
+                "num_predict": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+        )
+
+        if stream:
+            # For streaming, collect all chunks
+            text = ""
+            for chunk in response:
+                # Try both 'response' and 'thinking' fields
+                text += getattr(chunk, 'response', '') or getattr(chunk, 'thinking', '')
+            return text
+        else:
+            # For thinking models, the output might be in 'thinking' field
+            # Try 'response' first, fallback to 'thinking'
+            result = getattr(response, 'response', '') or getattr(response, 'thinking', '')
+            return result
+
+
+class OllamaTokenizer:
+    """
+    Dummy tokenizer for Ollama models to maintain interface compatibility.
+
+    Ollama handles tokenization internally, so this is just a placeholder
+    to maintain compatibility with code expecting a tokenizer object.
+    """
+
+    def __init__(self):
+        self.eos_token = "</s>"
+        self.pad_token = "<pad>"
+        self.eos_token_id = 0
+
+    def __len__(self):
+        """Return arbitrary vocab size."""
+        return 100000
+
+
+# ============================================================================
+# GPU Memory Functions
+# ============================================================================
+
 def check_gpu_memory() -> Dict[str, Any]:
     """
     Check available GPU memory and return statistics.
@@ -224,8 +332,8 @@ def load_gpt_oss_gguf(
 
 def generate_text(
     model: Any,
-    tokenizer: Any,
-    prompt: str,
+    tokenizer: Any = None,
+    prompt: str = "",
     max_new_tokens: int = 256,
     temperature: float = 0.7,
     top_p: float = 0.9,
@@ -236,7 +344,7 @@ def generate_text(
 
     Args:
         model: Loaded model (HuggingFace or OllamaModel)
-        tokenizer: Loaded tokenizer (or OllamaTokenizer)
+        tokenizer: Loaded tokenizer (or OllamaTokenizer, optional for Ollama)
         prompt: Input prompt
         max_new_tokens: Maximum tokens to generate
         temperature: Sampling temperature (0.0 = deterministic)
@@ -250,7 +358,7 @@ def generate_text(
         >>> text = generate_text(model, tokenizer, "Translate to English: 안녕하세요")
         >>> print(text)
     """
-    # Check if this is an OllamaModel
+    # Check if this is an OllamaModel FIRST before using tokenizer
     if isinstance(model, OllamaModel):
         return model.generate(
             prompt=prompt,
@@ -259,7 +367,10 @@ def generate_text(
             top_p=top_p,
         )
 
-    # HuggingFace model path
+    # HuggingFace model path - requires tokenizer
+    if tokenizer is None:
+        raise ValueError("tokenizer is required for HuggingFace models")
+
     inputs = tokenizer(prompt, return_tensors="pt")
 
     if torch.cuda.is_available():
@@ -371,104 +482,8 @@ SYNONYM_VERIFICATION_PROMPT = """다음 두 단어가 같은 의미를 가지거
 
 
 # ============================================================================
-# Ollama Integration
+# Ollama Loader Functions
 # ============================================================================
-
-class OllamaModel:
-    """
-    Wrapper class for Ollama models to provide compatible interface.
-
-    This class wraps an ollama.Client to provide the same interface
-    as HuggingFace models used in this module.
-
-    Attributes:
-        client: Ollama client instance
-        model_name: Name of the ollama model
-
-    Example:
-        >>> model = OllamaModel("qwen3:30b-a3b-thinking-2507-fp16")
-        >>> response = model.generate("Hello, how are you?")
-    """
-
-    def __init__(self, model_name: str, host: str = "http://localhost:11434"):
-        """
-        Initialize Ollama model wrapper.
-
-        Args:
-            model_name: Name of the ollama model (e.g., "qwen3:30b")
-            host: Ollama server URL
-        """
-        try:
-            import ollama
-        except ImportError:
-            raise ImportError(
-                "ollama not installed. Install with:\n"
-                "pip install ollama"
-            )
-
-        self.model_name = model_name
-        self.host = host
-        self.client = ollama.Client(host=host)
-
-    def generate(
-        self,
-        prompt: str,
-        max_new_tokens: int = 256,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
-        stream: bool = False,
-    ) -> str:
-        """
-        Generate text using Ollama model.
-
-        Args:
-            prompt: Input prompt
-            max_new_tokens: Maximum tokens to generate (mapped to num_predict)
-            temperature: Sampling temperature
-            top_p: Nucleus sampling threshold
-            stream: Whether to stream the response
-
-        Returns:
-            Generated text
-        """
-        response = self.client.generate(
-            model=self.model_name,
-            prompt=prompt,
-            stream=stream,
-            options={
-                "num_predict": max_new_tokens,
-                "temperature": temperature,
-                "top_p": top_p,
-            }
-        )
-
-        if stream:
-            # For streaming, collect all chunks
-            text = ""
-            for chunk in response:
-                text += chunk.get("response", "")
-            return text
-        else:
-            return response.get("response", "")
-
-
-class OllamaTokenizer:
-    """
-    Dummy tokenizer for Ollama models to maintain interface compatibility.
-
-    Ollama handles tokenization internally, so this is just a placeholder
-    to maintain compatibility with code expecting a tokenizer object.
-    """
-
-    def __init__(self):
-        self.eos_token = "</s>"
-        self.pad_token = "<pad>"
-        self.eos_token_id = 0
-
-    def __len__(self):
-        """Return arbitrary vocab size."""
-        return 100000
-
 
 def load_ollama_model(
     model_name: str = "qwen3:30b-a3b-thinking-2507-fp16",
@@ -513,8 +528,9 @@ def load_ollama_model(
     print("\n1️⃣ Connecting to Ollama server...")
     try:
         client = ollama.Client(host=host)
-        models = client.list()
-        model_names = [m["name"] for m in models.get("models", [])]
+        models_response = client.list()
+        # models_response.models is a list of Model objects with .model attribute
+        model_names = [m.model for m in models_response.models]
 
         if model_name not in model_names:
             print(f"⚠️  Warning: Model '{model_name}' not found in ollama")
