@@ -601,59 +601,473 @@ opensearch-neural-pre-train/
 
 ---
 
-## 🎯 다음 즉시 할 일 (Priority)
+## 🎯 개발 순서 (Implementation Order)
 
-### 🔥 High Priority (이번 주)
+### 📅 **권장 개발 순서**
 
-1. **Notebook 2 재실행 - 대량 합성 데이터 생성**
-   ```python
-   # notebooks/02_llm_synthetic_data_generation.ipynb
-   # max_documents를 10 → 1000으로 변경
-   synthetic_pairs = generate_synthetic_qd_pairs(
-       documents=documents[:1000],  # 1000 documents
-       num_queries_per_doc=3,
-   )
-   # 예상 출력: 3000 synthetic pairs
-   ```
+아래 순서대로 개발하면 효율적으로 진행할 수 있습니다:
 
-2. **Hard Negative Mining 구현**
-   ```python
-   # src/training/hard_negative_miner.py
-   - BM25 기반 negative sampling
-   - Top-K 후보 중 positive 제외
-   - Batch processing for efficiency
-   ```
+---
 
-3. **Neural Sparse Encoder 기본 구현**
-   ```python
-   # src/models/neural_sparse_encoder.py
-   - BERT base + projection layer
-   - Forward pass 구현
-   - 간단한 테스트
-   ```
+#### **Step 1: Hard Negative Miner 구현** ⏱️ 30분
+**파일:** `src/training/hard_negative_miner.py`
 
-### 📌 Medium Priority (다음 주)
+**작업 내용:**
+```python
+# BM25 기반 negative sampling 구현
+class HardNegativeMiner:
+    def __init__(self, documents, bm25_index):
+        pass
 
-4. **Loss Functions 구현**
-   - Ranking loss
-   - Cross-lingual loss
-   - FLOPS regularization
+    def mine_hard_negatives(self, query, positive_doc_id, top_k=100):
+        # 1. BM25로 top_k 문서 검색
+        # 2. Positive 제외
+        # 3. 상위 N개를 hard negatives로 반환
+        pass
+```
 
-5. **Training Loop 구현**
-   - Trainer class
-   - Logging and checkpointing
-   - Early stopping
+**체크리스트:**
+- [ ] BM25 인덱스 구축
+- [ ] Query별 top-k retrieval
+- [ ] Positive 필터링
+- [ ] Batch processing 지원
+- [ ] 간단한 테스트 작성
 
-6. **Evaluation Framework**
-   - Test set 분리
-   - Metrics 계산
-   - Baseline 비교
+**완료 기준:** 10개 query에 대해 hard negatives 성공적으로 생성
 
-### 💡 Low Priority (나중에)
+---
 
-7. **OpenSearch 통합**
-8. **문서화**
-9. **배포 준비**
+#### **Step 2: Neural Sparse Encoder 기본 구현** ⏱️ 1시간
+**파일:** `src/models/neural_sparse_encoder.py`
+
+**작업 내용:**
+```python
+class NeuralSparseEncoder(nn.Module):
+    def __init__(self, base_model="klue/bert-base"):
+        # BERT encoder + projection layer
+        pass
+
+    def forward(self, input_ids, attention_mask):
+        # 1. BERT encoding
+        # 2. Sparse projection
+        # 3. Max pooling
+        # Return: [batch, vocab_size] sparse vector
+        pass
+```
+
+**체크리스트:**
+- [ ] BERT base 로드 (klue/bert-base)
+- [ ] Projection layer 구현
+- [ ] Forward pass 구현
+- [ ] Output shape 검증
+- [ ] Dummy input으로 테스트
+
+**완료 기준:**
+- Input: "한국어 검색" → Output: [30000] sparse vector
+- Non-zero terms < 100개
+- GPU 메모리 < 2GB
+
+---
+
+#### **Step 3: Notebook 2 재실행 (백그라운드)** ⏱️ 2-3시간
+**파일:** `notebooks/02_llm_synthetic_data_generation.ipynb`
+
+**작업 내용:**
+```python
+# Cell 8 수정
+synthetic_pairs = generate_synthetic_qd_pairs(
+    documents=documents[:1000],  # 10 → 1000
+    llm_model=llm_model,
+    llm_tokenizer=llm_tokenizer,
+    num_queries_per_doc=3,
+    max_documents=1000,  # 10 → 1000
+    enable_filtering=True,
+    verbose=True,
+)
+```
+
+**체크리스트:**
+- [ ] max_documents 변경: 10 → 1000
+- [ ] Notebook 실행 시작
+- [ ] 백그라운드로 진행 (터미널에서 nohup 사용)
+- [ ] 진행 상황 모니터링
+
+**완료 기준:**
+- 3000개 synthetic pairs 생성 완료
+- `dataset/llm_generated/synthetic_qd_pairs.pkl` 업데이트
+- 데이터 품질 검증 (한국어 쿼리 비율 > 80%)
+
+**병렬 작업:** 이 노트북이 돌아가는 동안 Step 4, 5 진행
+
+---
+
+#### **Step 4: Loss Functions 구현** ⏱️ 1시간
+**파일:** `src/training/losses.py`
+
+**작업 내용:**
+```python
+def ranking_loss(query_vec, pos_doc_vec, neg_doc_vecs, margin=0.1):
+    """Margin ranking loss for retrieval."""
+    pass
+
+def cross_lingual_loss(korean_vec, english_vec):
+    """Cosine similarity loss for bilingual terms."""
+    pass
+
+def flops_loss(sparse_vec, lambda_flops=0.001):
+    """FLOPS regularization for sparsity."""
+    pass
+
+def combined_loss(query_vec, pos_vec, neg_vecs,
+                  alpha=1.0, beta=0.1, gamma=0.001):
+    """Combined loss function."""
+    return (
+        alpha * ranking_loss(...) +
+        beta * cross_lingual_loss(...) +
+        gamma * flops_loss(...)
+    )
+```
+
+**체크리스트:**
+- [ ] Ranking loss (margin-based)
+- [ ] Cross-lingual loss (cosine similarity)
+- [ ] FLOPS loss (L1 regularization)
+- [ ] Combined loss with weights
+- [ ] Unit tests for each loss
+
+**완료 기준:** 모든 loss function 테스트 통과
+
+---
+
+#### **Step 5: Data Collator 구현** ⏱️ 30분
+**파일:** `src/training/data_collator.py`
+
+**작업 내용:**
+```python
+class NeuralSparseDataCollator:
+    def __init__(self, tokenizer, max_length=256):
+        pass
+
+    def __call__(self, batch):
+        # 1. Query, positive doc, negative docs tokenize
+        # 2. Padding and truncation
+        # 3. Return batch dict
+        pass
+```
+
+**체크리스트:**
+- [ ] Query tokenization
+- [ ] Positive/negative doc tokenization
+- [ ] Dynamic padding
+- [ ] Attention mask 생성
+- [ ] Batch 구조 검증
+
+**완료 기준:** DataLoader에서 정상 동작
+
+---
+
+#### **Step 6: Training Dataset 구현** ⏱️ 1시간
+**파일:** `src/training/neural_sparse_dataset.py`
+
+**작업 내용:**
+```python
+class NeuralSparseDataset(Dataset):
+    def __init__(self, qd_pairs, hard_negatives, documents):
+        # Load data and create index
+        pass
+
+    def __getitem__(self, idx):
+        # Return (query, pos_doc, [neg_docs])
+        pass
+```
+
+**체크리스트:**
+- [ ] QD pairs 로드
+- [ ] Hard negatives 통합
+- [ ] Random negatives 샘플링
+- [ ] Document index 구축
+- [ ] Train/val split
+
+**완료 기준:**
+- Dataset length > 100K
+- 각 sample에 positive 1개 + negatives 10-15개
+
+---
+
+#### **Step 7: Trainer 구현** ⏱️ 2시간
+**파일:** `src/training/trainer.py`
+
+**작업 내용:**
+```python
+class NeuralSparseTrainer:
+    def __init__(self, model, train_dataset, eval_dataset, config):
+        pass
+
+    def train_epoch(self):
+        # Training loop
+        pass
+
+    def evaluate(self):
+        # Evaluation loop
+        pass
+
+    def train(self):
+        # Full training with logging
+        pass
+```
+
+**체크리스트:**
+- [ ] Training loop 구현
+- [ ] Gradient accumulation
+- [ ] Mixed precision (AMP)
+- [ ] Logging (wandb or tensorboard)
+- [ ] Checkpointing
+- [ ] Early stopping
+- [ ] Learning rate scheduling
+
+**완료 기준:**
+- 10 step 학습 성공
+- Loss 감소 확인
+- Checkpoint 저장 확인
+
+---
+
+#### **Step 8: Training Config 작성** ⏱️ 15분
+**파일:** `config/training_config.yaml`
+
+**작업 내용:**
+```yaml
+model:
+  base: "klue/bert-base"
+  vocab_size: 30000
+
+training:
+  epochs: 10
+  batch_size: 32
+  learning_rate: 2e-5
+
+  alpha_ranking: 1.0
+  beta_cross_lingual: 0.1
+  gamma_sparsity: 0.001
+```
+
+**체크리스트:**
+- [ ] 모델 설정
+- [ ] 학습 하이퍼파라미터
+- [ ] Loss weights
+- [ ] 데이터 설정
+- [ ] 평가 설정
+
+---
+
+#### **Step 9: 초기 학습 실험** ⏱️ 3-4시간
+**파일:** `notebooks/05_model_training.ipynb`
+
+**작업 내용:**
+```python
+# 1. Config 로드
+# 2. Model, dataset, trainer 초기화
+# 3. 학습 실행 (small scale)
+# 4. 결과 분석
+```
+
+**체크리스트:**
+- [ ] 소량 데이터로 학습 (10K pairs)
+- [ ] 1 epoch 완료
+- [ ] Loss 감소 확인
+- [ ] Sparse vector 품질 확인
+- [ ] 학습 시간 측정
+
+**완료 기준:**
+- 1 epoch 학습 성공
+- Loss가 수렴하는 경향 확인
+- Top-K activated terms 분석
+
+---
+
+#### **Step 10: Data Augmentation Pipeline** ⏱️ 2시간
+**파일:** `notebooks/04_data_augmentation.ipynb`
+
+**작업 내용:**
+```python
+# 1. Cross-lingual augmentation
+# 2. Hard negative mining (전체 데이터)
+# 3. Final training dataset 생성
+```
+
+**체크리스트:**
+- [ ] 한영 동의어 치환 (2-3배 증강)
+- [ ] 전체 데이터 hard negative mining
+- [ ] Train/val/test split (80/10/10)
+- [ ] 최종 데이터셋 저장
+
+**완료 기준:**
+- Total pairs: 400K+ positive, 1M+ negative
+- 데이터 품질 검증
+- 통계 리포트 생성
+
+---
+
+#### **Step 11: Full Training Run** ⏱️ 1-2일
+**파일:** `notebooks/05_model_training.ipynb`
+
+**작업 내용:**
+```python
+# Full training with augmented data
+trainer.train(
+    epochs=10,
+    batch_size=32,
+)
+```
+
+**체크리스트:**
+- [ ] Full dataset 로드
+- [ ] 10 epochs 학습
+- [ ] Validation 모니터링
+- [ ] Best checkpoint 저장
+- [ ] Learning curves 분석
+
+**완료 기준:**
+- 학습 완료 (10 epochs)
+- Best validation NDCG@10 > 0.5
+- Model checkpoint 저장
+
+---
+
+#### **Step 12: Evaluation Framework** ⏱️ 2시간
+**파일:** `src/evaluation/evaluator.py`, `notebooks/06_evaluation.ipynb`
+
+**작업 내용:**
+```python
+# 1. Test set evaluation
+# 2. Cross-lingual test
+# 3. Baseline 비교 (BM25)
+# 4. Analysis and visualization
+```
+
+**체크리스트:**
+- [ ] Metrics 구현 (MRR, NDCG, Recall)
+- [ ] Test set evaluation
+- [ ] Cross-lingual retrieval test
+- [ ] BM25 baseline 비교
+- [ ] Failure case 분석
+- [ ] Evaluation report 작성
+
+**완료 기준:**
+- NDCG@10 > 0.6
+- Cross-lingual retrieval 동작 확인
+- 상세 분석 리포트
+
+---
+
+#### **Step 13: Model Export** ⏱️ 1시간
+**파일:** `src/models/export.py`
+
+**작업 내용:**
+```python
+# PyTorch → ONNX → TorchScript
+torch.onnx.export(model, ...)
+traced_model = torch.jit.trace(model, ...)
+```
+
+**체크리스트:**
+- [ ] ONNX export
+- [ ] TorchScript export
+- [ ] Export 검증
+- [ ] 성능 테스트
+
+**완료 기준:**
+- Exported model 정상 동작
+- Latency 측정
+
+---
+
+#### **Step 14: OpenSearch Integration** ⏱️ 1일
+**파일:** `notebooks/07_opensearch_integration.ipynb`
+
+**작업 내용:**
+```python
+# 1. OpenSearch 설정
+# 2. Model 업로드
+# 3. Index 생성
+# 4. End-to-end test
+```
+
+**체크리스트:**
+- [ ] OpenSearch 설치/설정
+- [ ] Model upload to OpenSearch
+- [ ] Neural sparse pipeline 설정
+- [ ] Document indexing
+- [ ] Search query 테스트
+- [ ] 성능 벤치마크
+
+**완료 기준:**
+- OpenSearch에서 검색 성공
+- Latency < 50ms
+- 실제 사용 가능한 상태
+
+---
+
+#### **Step 15: Documentation** ⏱️ 1일
+**작업 내용:**
+- [ ] MODEL_CARD.md
+- [ ] TRAINING_GUIDE.md
+- [ ] DEPLOYMENT_GUIDE.md
+- [ ] API_REFERENCE.md
+- [ ] EVALUATION_REPORT.md
+- [ ] README 업데이트
+
+---
+
+### 📊 **개발 진행 상황 체크리스트**
+
+#### Week 1 (완료 ✅)
+- [x] 데이터 수집
+- [x] LLM 통합
+- [x] 한영 동의어 사전
+- [x] 한국어 쿼리 생성 수정
+
+#### Week 2 (현재)
+- [ ] Step 1: Hard Negative Miner
+- [ ] Step 2: Neural Sparse Encoder
+- [ ] Step 3: Notebook 2 재실행
+- [ ] Step 4: Loss Functions
+- [ ] Step 5: Data Collator
+
+#### Week 3
+- [ ] Step 6: Training Dataset
+- [ ] Step 7: Trainer
+- [ ] Step 8: Training Config
+- [ ] Step 9: 초기 학습 실험
+
+#### Week 4
+- [ ] Step 10: Data Augmentation
+- [ ] Step 11: Full Training Run
+
+#### Week 5
+- [ ] Step 12: Evaluation Framework
+- [ ] Hyperparameter tuning
+
+#### Week 6
+- [ ] Step 13: Model Export
+- [ ] Step 14: OpenSearch Integration
+
+#### Week 7-8
+- [ ] Step 15: Documentation
+- [ ] Final testing
+- [ ] Deployment
+
+---
+
+### 🎯 **지금 바로 시작할 작업**
+
+**즉시 시작:** Step 1 (Hard Negative Miner) - 30분
+**다음:** Step 2 (Neural Sparse Encoder) - 1시간
+**병렬:** Step 3 (Notebook 2 백그라운드 실행) - 2-3시간
+
+총 예상 시간 (오늘): **1.5시간 개발 + 2-3시간 백그라운드**
+
+---
 
 ---
 
