@@ -1,11 +1,11 @@
 {
-  "base_qd_pairs_count": 30000,
-  "synthetic_qd_pairs_count": 32,
+  "base_qd_pairs_count": 27939,
+  "synthetic_qd_pairs_count": 23,
   "enhanced_synonyms_count": 32,
-  "total_documents": 127910,
+  "total_documents": 9996,
   "synthetic_data_quality": {
-    "avg_query_length": 23.4375,
+    "avg_query_length": 28.652173913043477,
     "min_query_length": 10,
-    "max_query_length": 44
+    "max_query_length": 94
   }
 }

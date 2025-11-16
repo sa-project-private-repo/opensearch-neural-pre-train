@@ -1,33 +1,21 @@
 {
-  "학습": [
-    "training",
-    "train"
+  "신경망": [
+    "net"
   ],
-  "쿼리": [
-    "Query"
+  "문서": [
+    "doc"
   ],
   "분석": [
-    "analysis",
-    "analyze"
-  ],
-  "트랜스포머": [
-    "transformer"
-  ],
-  "최적화": [
-    "optimize"
-  ],
-  "희소": [
-    "Sparse"
-  ],
-  "시스템": [
-    "System"
-  ],
-  "기술": [
-    "technology"
+    "analysis"
   ],
   "모델": [
     "model",
     "Model"
+  ],
+  "학습": [
+    "learning",
+    "training",
+    "train"
   ],
   "검색": [
     "search",
@@ -42,11 +30,6 @@
     "algorithm",
     "Algorithm"
   ],
-  "신경망": [
-    "network",
-    "neural network",
-    "net"
-  ],
   "벡터": [
     "vector",
     "Vector"
@@ -59,10 +42,9 @@
     "token",
     "Token"
   ],
-  "문서": [
-    "document",
-    "doc",
-    "Document"
+  "쿼리": [
+    "query",
+    "Query"
   ],
   "언어": [
     "language",
@@ -71,6 +53,10 @@
   "처리": [
     "processing",
     "process"
+  ],
+  "트랜스포머": [
+    "transformer",
+    "Transformer"
   ],
   "어텐션": [
     "attention",
@@ -88,6 +74,10 @@
     "loss",
     "Loss"
   ],
+  "최적화": [
+    "optimization",
+    "optimize"
+  ],
   "배치": [
     "batch",
     "Batch"
@@ -104,6 +94,10 @@
     "gpt",
     "GPT"
   ],
+  "희소": [
+    "sparse",
+    "Sparse"
+  ],
   "밀집": [
     "dense",
     "Dense"
@@ -115,6 +109,14 @@
   "스코어": [
     "score",
     "Score"
+  ],
+  "시스템": [
+    "system",
+    "System"
+  ],
+  "기술": [
+    "technology",
+    "tech"
   ],
   "방법": [
     "method",

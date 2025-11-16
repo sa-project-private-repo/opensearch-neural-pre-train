@@ -259,11 +259,16 @@ def build_comprehensive_bilingual_dictionary(
                 final_dict[syn].add(term)
         print(f"  Added {len(manual_pairs):,} manual pairs")
 
-    # Convert sets to lists
-    final_dict_cleaned = {
-        term: list(syns) for term, syns in final_dict.items()
-        if len(syns) > 0
-    }
+    # Convert sets to lists and ensure all English terms are lowercase
+    final_dict_cleaned = {}
+    for term, syns in final_dict.items():
+        if len(syns) > 0:
+            # Lowercase all ASCII (English) terms
+            lowercase_syns = [
+                syn.lower() if syn.isascii() else syn
+                for syn in syns
+            ]
+            final_dict_cleaned[term] = lowercase_syns
 
     print("\n" + "="*70)
     print(f"✓ Bilingual Dictionary Complete")
@@ -283,52 +288,54 @@ def get_default_korean_english_pairs() -> Dict[str, List[str]]:
     """
     Get curated Korean-English term pairs for common ML/AI terms.
 
+    Note: All English synonyms are lowercase for case-insensitive matching.
+
     Returns:
         Dictionary of Korean terms to English synonyms
     """
     return {
         # Core ML/AI terms
-        "모델": ["model", "Model"],
+        "모델": ["model"],
         "학습": ["learning", "training", "train"],
         "검색": ["search", "retrieval", "retrieve"],
-        "데이터": ["data", "Data"],
-        "알고리즘": ["algorithm", "Algorithm"],
+        "데이터": ["data"],
+        "알고리즘": ["algorithm"],
         "신경망": ["network", "neural network", "net"],
-        "벡터": ["vector", "Vector"],
-        "임베딩": ["embedding", "Embedding"],
+        "벡터": ["vector"],
+        "임베딩": ["embedding"],
 
         # NLP terms
-        "토큰": ["token", "Token"],
-        "문서": ["document", "doc", "Document"],
-        "쿼리": ["query", "Query"],
-        "언어": ["language", "Language"],
+        "토큰": ["token"],
+        "문서": ["document", "doc"],
+        "쿼리": ["query"],
+        "언어": ["language"],
         "처리": ["processing", "process"],
         "분석": ["analysis", "analyze"],
 
         # Architecture terms
-        "트랜스포머": ["transformer", "Transformer"],
-        "어텐션": ["attention", "Attention"],
-        "인코더": ["encoder", "Encoder"],
-        "디코더": ["decoder", "Decoder"],
+        "트랜스포머": ["transformer"],
+        "어텐션": ["attention"],
+        "인코더": ["encoder"],
+        "디코더": ["decoder"],
 
         # Training terms
-        "손실": ["loss", "Loss"],
+        "손실": ["loss"],
         "최적화": ["optimization", "optimize"],
-        "배치": ["batch", "Batch"],
-        "에포크": ["epoch", "Epoch"],
+        "배치": ["batch"],
+        "에포크": ["epoch"],
 
         # Specific models
-        "버트": ["bert", "BERT"],
-        "지피티": ["gpt", "GPT"],
+        "버트": ["bert"],
+        "지피티": ["gpt"],
 
         # Search terms
-        "희소": ["sparse", "Sparse"],
-        "밀집": ["dense", "Dense"],
+        "희소": ["sparse"],
+        "밀집": ["dense"],
         "랭킹": ["ranking", "rank"],
-        "스코어": ["score", "Score"],
+        "스코어": ["score"],
 
         # General
-        "시스템": ["system", "System"],
+        "시스템": ["system"],
         "기술": ["technology", "tech"],
         "방법": ["method", "approach"],
         "성능": ["performance", "perf"],
@@ -576,6 +583,7 @@ def discover_new_synonyms_with_llm(
     for term in tqdm(seed_terms, desc="Discovering synonyms"):
         prompt = f"""다음 단어와 같은 의미를 가지는 한국어 또는 영어 동의어를 {num_candidates_per_term}개 생성하세요.
 각 동의어는 한 줄에 하나씩 작성하세요.
+**중요: 영어 동의어는 모두 소문자로 작성하세요 (예: model, not Model).**
 
 단어: {term}
 
@@ -599,6 +607,9 @@ def discover_new_synonyms_with_llm(
                 line = line.strip()
 
                 if line and len(line) > 1:
+                    # Lowercase English terms
+                    if line.isascii():
+                        line = line.lower()
                     synonyms.append(line)
 
             if synonyms:

@@ -23,16 +23,18 @@ from tqdm import tqdm
 # Prompt templates
 DOC_TO_QUERY_PROMPT = """다음 문서를 읽고 사용자가 이 문서를 찾기 위해 검색할 만한 쿼리를 {num_queries}개 생성하세요.
 각 쿼리는 짧고 구체적이어야 합니다 (5-15단어).
+**중요: 쿼리는 반드시 한국어로 작성해야 합니다.**
 
 문서: {document}
 
-검색 쿼리 ({num_queries}개, 각 줄에 하나씩):"""
+검색 쿼리 ({num_queries}개, 각 줄에 하나씩, 한국어로):"""
 
 QUERY_AUGMENT_PROMPT = """다음 검색 쿼리와 같은 의미를 가지지만 표현이 다른 쿼리를 {num_variants}개 생성하세요.
+**중요: 변형 쿼리는 반드시 한국어로 작성해야 합니다.**
 
 원본 쿼리: {query}
 
-변형 쿼리 ({num_variants}개, 각 줄에 하나씩):"""
+변형 쿼리 ({num_variants}개, 각 줄에 하나씩, 한국어로):"""
 
 
 def generate_queries_from_document(
