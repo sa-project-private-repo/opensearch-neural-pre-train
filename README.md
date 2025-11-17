@@ -1,10 +1,14 @@
-# OpenSearch Korean Neural Sparse Model (v0.3.0)
+# OpenSearch Neural Sparse Pre-training
 
-한국어 뉴스 데이터 기반 시간 가중치 군집화를 통한 비지도 학습 Neural Sparse 검색 모델
+Korean-English cross-lingual Neural Sparse model for OpenSearch retrieval.
 
-## 🎯 프로젝트 개요
+## Project Overview
 
-OpenSearch의 **inference-free IR 모델** 표준에 따라 한국어 neural sparse 검색 모델을 학습합니다. 이 모델은 문서는 BERT로 인코딩하고, 쿼리는 tokenizer + IDF lookup만 사용하여 **매우 빠른 검색**을 제공합니다.
+This project implements a Neural Sparse encoder optimized for Korean-English bilingual search, trained with:
+- 27,939 query-document pairs
+- 74 Korean-English synonym pairs
+- Cross-lingual alignment objectives
+- FLOPS-based sparsity regularization
 
 ### 🌟 v0.3.0 주요 개선사항
 
@@ -39,39 +43,52 @@ OpenSearch의 **inference-free IR 모델** 표준에 따라 한국어 neural spa
 
 ```
 opensearch-neural-pre-train/
-├── src/                                 # 🆕 Core modules (v0.3.0)
-│   ├── losses.py                        # ✅ Contrastive loss functions
-│   ├── data_loader.py                   # ✅ News data with dates
-│   ├── temporal_analysis.py             # ✅ Temporal IDF & trend detection
-│   ├── negative_sampling.py             # ✅ BM25 hard negatives
-│   ├── temporal_clustering.py           # ✅ Synonym discovery
-│   └── cross_lingual_synonyms.py        # 🆕 Korean-English bilingual (NEW!)
+├── config/                              # ⚙️ Configuration files
+│   └── training_config.yaml             # Training hyperparameters
+│
+├── dataset/                             # 📊 Data storage
+│   ├── base_model/                      # QD pairs and documents
+│   ├── synonyms/                        # Korean-English synonyms
+│   ├── wikipedia/                       # Wikipedia data (optional)
+│   └── training/                        # Processed training data
+│
+├── models/                              # 🤖 Trained models (gitignored)
+│   └── [saved models here]
 │
 ├── notebooks/                           # 📓 Jupyter notebooks
-│   ├── korean_neural_sparse_training.ipynb        # Original training notebook
-│   ├── korean_neural_sparse_training_v0.3.0.ipynb # 🆕 Updated with Phase 1-5 (NEW!)
-│   └── neural_sparse_inference.ipynb              # Inference notebook
+│   ├── data_collection/                 # Data extraction notebooks
+│   │   ├── 01_wikipedia_data_extraction.ipynb
+│   │   └── 02_synonym_extraction.ipynb
+│   ├── pretraining/                     # Pre-training notebooks
+│   │   └── 01_model_pretraining.ipynb
+│   └── legacy/                          # Legacy notebooks
 │
-├── models/                              # 🤖 Trained models directory (gitignored)
-│   ├── opensearch-korean-neural-sparse-v1/        # Production model
-│   ├── test_korean_neural_sparse_model/           # Test model
-│   └── best_korean_neural_sparse_encoder.pt       # Training checkpoints
+├── outputs/                             # 📤 Training outputs
+│   ├── best_model/                      # Best checkpoint
+│   └── final_model/                     # Final model
+│
+├── scripts/                             # 🚀 Executable scripts
+│   ├── train_small_scale.py             # Small-scale test training
+│   └── train_full_scale.py              # Full-scale training
+│
+├── src/                                 # 💻 Source code
+│   ├── data/                            # Data processing
+│   │   ├── wikipedia_parser.py
+│   │   ├── synonym_extractor.py
+│   │   ├── simple_synonym_builder.py
+│   │   └── training_data_builder.py
+│   ├── models/                          # Model architecture
+│   │   └── neural_sparse_encoder.py
+│   └── training/                        # Training infrastructure
+│       ├── losses.py
+│       ├── data_collator.py
+│       └── trainer.py
 │
 ├── tests/                               # 🧪 Test scripts
-│   ├── test_korean_neural_sparse.py     # Phase 1: Improved loss functions
-│   ├── test_temporal_features.py        # Phase 2: Temporal analysis
-│   └── test_bilingual_synonyms.py       # Phase 5: Cross-lingual synonyms
+│   └── test_training_pipeline.py
 │
-├── demo_idf_korean.py                   # ⚡ 간단한 데모 (의존성 최소)
-│
-├── archive/                             # 🗄️ Archived scripts (old integration/fix scripts)
-├── plan.md                              # 📋 전체 개선 계획서
-├── USAGE_EXAMPLES.md                    # 📚 src 모듈 사용 예제
-├── ARM_INSTALL.md                       # 🍎 ARM 시스템 설치 가이드
-├── setup_amazon_linux_2023.sh           # 🚀 Amazon Linux 2023 자동 설치
-├── requirements.txt                     # 📦 Python 의존성
-├── requirements-minimal.txt             # 📦 ARM 호환 최소 의존성
-└── README.md                            # 📄 이 파일
+├── plan.md                              # 📋 Project plan
+└── README.md                            # 📄 This file
 ```
 
 ## 🚀 빠른 시작
