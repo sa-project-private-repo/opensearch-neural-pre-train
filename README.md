@@ -56,11 +56,10 @@ opensearch-neural-pre-train/
 │   └── [saved models here]
 │
 ├── notebooks/                           # 📓 Jupyter notebooks
-│   ├── data_collection/                 # Data extraction notebooks
+│   ├── pretraining-neural-sparse-model/ # Neural Sparse pre-training workflow
 │   │   ├── 01_wikipedia_data_extraction.ipynb
-│   │   └── 02_synonym_extraction.ipynb
-│   ├── pretraining/                     # Pre-training notebooks
-│   │   └── 01_model_pretraining.ipynb
+│   │   ├── 02_synonym_extraction.ipynb
+│   │   └── 03_model_pretraining.ipynb
 │   └── legacy/                          # Legacy notebooks
 │
 ├── outputs/                             # 📤 Training outputs
