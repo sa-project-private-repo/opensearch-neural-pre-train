@@ -1,9 +1,15 @@
 """Full-scale Neural Sparse pre-training script."""
 
+import sys
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 import torch
 from torch.utils.data import DataLoader
 import yaml
-from pathlib import Path
 import argparse
 
 from src.models.neural_sparse_encoder import NeuralSparseEncoder
