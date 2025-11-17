@@ -204,8 +204,8 @@ class WikipediaXMLParser:
         """
         print(f"Parsing Wikipedia dump: {dump_path}")
 
-        # XML namespaces
-        ns = {"mw": "http://www.mediawiki.org/xml/export-0.10/"}
+        # XML namespaces - Updated to 0.11 for 2025 dumps
+        ns = {"mw": "http://www.mediawiki.org/xml/export-0.11/"}
 
         # Open compressed dump
         with bz2.open(dump_path, "rt", encoding="utf-8") as f:
@@ -214,6 +214,7 @@ class WikipediaXMLParser:
             context = iter(context)
 
             current_page = {}
+            is_redirect = False
 
             for event, elem in context:
                 if event == "end":
@@ -221,14 +222,26 @@ class WikipediaXMLParser:
 
                     if tag == "title":
                         current_page["title"] = elem.text or ""
+                    elif tag == "ns":
+                        # Namespace - 0 is main article namespace
+                        current_page["ns"] = elem.text or "0"
                     elif tag == "id" and "id" not in current_page:
                         # First ID is page ID
                         current_page["id"] = elem.text or ""
+                    elif tag == "redirect":
+                        # Mark as redirect page
+                        is_redirect = True
                     elif tag == "text":
                         current_page["wikitext"] = elem.text or ""
                     elif tag == "page":
-                        # End of page - yield article
-                        if "wikitext" in current_page:
+                        # End of page - yield article if valid
+                        # Skip redirect pages and non-main namespace
+                        if (
+                            not is_redirect
+                            and "wikitext" in current_page
+                            and current_page.get("ns") == "0"
+                            and current_page.get("wikitext", "").strip()
+                        ):
                             yield {
                                 "id": current_page.get("id", ""),
                                 "title": current_page.get("title", ""),
@@ -236,7 +249,9 @@ class WikipediaXMLParser:
                                 "url": f"https://{self.language}.wikipedia.org/wiki/{current_page.get('title', '').replace(' ', '_')}",
                             }
 
+                        # Reset for next page
                         current_page = {}
+                        is_redirect = False
 
                     # Clear element to save memory
                     elem.clear()
