@@ -4,10 +4,17 @@
 # Model files
 *.pt
 *.bin
+*.log
+*.pyc
+
+__pycache__
 
 # Models directory (all trained models)
 models/
 !src/models/
+
+# Training outputs (checkpoints, best models)
+outputs/
 
 datasets/
 
