@@ -1,0 +1,53 @@
+# Fine-tuning configuration for SPLADE-doc on MS MARCO
+# Use after pre-training on Korean+English data
+
+model:
+  name: "bert-base-multilingual-cased"
+  use_idf: true  # Enable IDF-aware weighting
+  dropout: 0.1
+  resume_from: "outputs/pretrain_korean/best_model/checkpoint.pt"  # Pre-trained checkpoint
+
+data:
+  # MS MARCO training data (05 notebook)
+  train_patterns:
+    - "dataset/msmarco/triples_chunk_*.jsonl"
+
+  # MS MARCO validation data (if available)
+  val_patterns:
+    - "dataset/msmarco/dev_triples_*.jsonl"
+
+  batch_size: 8  # Smaller batch for fine-tuning
+  max_length: 256
+  num_negatives: 1  # MS MARCO provides 1 negative per triple
+  num_workers: 8
+  use_hard_negatives: true  # MS MARCO triples are pre-mined
+
+loss:
+  temperature: 0.05
+  lambda_flops: 5e-5  # Reduced regularization for fine-tuning
+  lambda_idf: 5e-4
+  lambda_kd: 0.0  # No KD for fine-tuning
+  use_kd: false
+  use_idf_penalty: true  # Enable IDF penalty
+
+training:
+  num_epochs: 3  # Fewer epochs for fine-tuning
+  learning_rate: 1e-5  # Lower LR for fine-tuning
+  weight_decay: 0.01
+  warmup_steps: 1000
+  gradient_accumulation_steps: 8  # Effective batch size = 8 * 8 = 64
+  max_grad_norm: 1.0
+
+  # Logging and checkpointing
+  log_steps: 100
+  save_epochs: 1
+  output_dir: "outputs/finetune_msmarco"
+
+device: "cuda"
+
+# Notes:
+# 1. Fine-tune AFTER pre-training on Korean data
+# 2. Uses MS MARCO triples from notebook 05
+# 3. Lower learning rate and fewer epochs for fine-tuning
+# 4. Enables IDF-aware penalty for better performance
+# 5. Evaluate on BEIR benchmark after fine-tuning

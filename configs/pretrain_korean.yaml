@@ -1,0 +1,68 @@
+# Pre-training configuration for SPLADE-doc
+# Focus on Korean language data from notebooks 01-03
+
+model:
+  name: "bert-base-multilingual-cased"  # Supports Korean + English
+  use_idf: false  # Will enable after computing IDF weights
+  dropout: 0.1
+  # resume_from: null  # Path to checkpoint to resume from
+
+data:
+  # Training data patterns (maximizing Korean data usage)
+  train_patterns:
+    # Korean Wikipedia (01 notebook)
+    - "dataset/paired_data_split/ko_wiki_title_summary_*_train_*.jsonl"
+    - "dataset/paired_data_split/ko_wiki_title_paragraph_*_train_*.jsonl"
+    # NamuWiki (01 notebook)
+    - "dataset/paired_data_split/namuwiki_title_summary_*_train_*.jsonl"
+    - "dataset/paired_data_split/namuwiki_title_paragraph_*_train_*.jsonl"
+    # 모두의 말뭉치 (01 notebook)
+    - "dataset/paired_data_split/modu_*_train_*.jsonl"
+    # English Wikipedia (for bilingual capability)
+    - "dataset/paired_data_split/en_wiki_title_summary_*_train_*.jsonl"
+
+  # Validation data patterns
+  val_patterns:
+    - "dataset/paired_data_split/ko_wiki_*_val_*.jsonl"
+    - "dataset/paired_data_split/namuwiki_*_val_*.jsonl"
+    - "dataset/paired_data_split/en_wiki_*_val_*.jsonl"
+
+  batch_size: 16
+  max_length: 256
+  num_negatives: 7  # Number of hard negatives per query
+  num_workers: 8
+  use_hard_negatives: false  # Set true if using mined negatives from 04
+
+loss:
+  temperature: 0.05  # Contrastive loss temperature
+  lambda_flops: 1e-4  # FLOPS regularization
+  lambda_idf: 1e-3  # IDF-aware penalty
+  lambda_kd: 0.5  # Knowledge distillation weight
+  use_kd: false  # Enable for teacher-student training
+  use_idf_penalty: false  # Enable after computing IDF weights
+
+training:
+  num_epochs: 10
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 5000
+  gradient_accumulation_steps: 4  # Effective batch size = 16 * 4 = 64
+  max_grad_norm: 1.0
+
+  # Logging and checkpointing
+  log_steps: 100
+  save_epochs: 1
+  output_dir: "outputs/pretrain_korean"
+
+device: "cuda"  # or "cpu"
+
+# Notes:
+# 1. This config maximizes Korean data usage from notebook 01
+# 2. Includes NamuWiki (~1.5M articles) and 모두의 말뭉치 for Korean performance
+# 3. Uses train/val split data from notebook 01
+# 4. For full training, add pre-training datasets from notebook 03:
+#    - dataset/pretraining/s2orc_chunk_*.jsonl
+#    - dataset/pretraining/gooaq_chunk_*.jsonl
+#    - etc.
+# 5. For hard negatives, use mined data from notebook 04:
+#    - dataset/hard_negatives/*_chunk_*.jsonl
