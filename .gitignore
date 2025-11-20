@@ -18,6 +18,8 @@ outputs/
 
 datasets/
 
+dataset/
+
 # Legacy model paths (deprecated)
 opensearch-korean-neural-sparse-v1*
 test_korean_neural_sparse_model/

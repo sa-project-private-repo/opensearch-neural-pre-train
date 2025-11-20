@@ -83,3 +83,10 @@ Region is us-east-1.
 
     [optional footer(s)]
     '''
+
+
+OpenSearch Nerual Sparse Model 정보는 아래와 같습니다.
+
+- <https://huggingface.co/opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1>
+- <https://github.com/zhichao-aws/opensearch-sparse-model-tuning-sample>
+- ./sparse-retriever.pdf
