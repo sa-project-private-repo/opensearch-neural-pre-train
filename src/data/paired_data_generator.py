@@ -1,6 +1,7 @@
 """Generate (Query, Document) paired data from raw text articles."""
 
 import json
+import random
 import re
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
@@ -282,6 +283,118 @@ class PairedDataGenerator:
             )
 
         print(f"\nTotal: {total_count} pairs saved in {chunk_num} chunks")
+        return total_count
+
+    def split_and_save_pairs(
+        self,
+        pairs: Iterator[Dict],
+        output_dir: str,
+        prefix: str,
+        train_ratio: float = 0.8,
+        val_ratio: float = 0.1,
+        test_ratio: float = 0.1,
+        chunk_size: int = 100000,
+        seed: int = 42,
+    ) -> Tuple[int, int, int]:
+        """
+        Split paired data into train/val/test sets and save to separate files.
+
+        Args:
+            pairs: Iterator of paired data
+            output_dir: Output directory
+            prefix: File prefix (e.g., "ko_wiki_title_summary")
+            train_ratio: Training set ratio
+            val_ratio: Validation set ratio
+            test_ratio: Test set ratio
+            chunk_size: Number of pairs per chunk
+            seed: Random seed for reproducibility
+
+        Returns:
+            Tuple of (train_count, val_count, test_count)
+        """
+        # Validate ratios
+        assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, \
+            "Split ratios must sum to 1.0"
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set random seed for reproducibility
+        random.seed(seed)
+
+        # Load all pairs into memory for shuffling
+        print(f"Loading pairs into memory for splitting...")
+        all_pairs = list(pairs)
+        total_count = len(all_pairs)
+
+        print(f"Loaded {total_count:,} pairs")
+        print(f"Split ratios: train={train_ratio:.1%}, val={val_ratio:.1%}, test={test_ratio:.1%}")
+
+        # Shuffle for random split
+        random.shuffle(all_pairs)
+
+        # Calculate split indices
+        train_end = int(total_count * train_ratio)
+        val_end = train_end + int(total_count * val_ratio)
+
+        # Split data
+        train_pairs = all_pairs[:train_end]
+        val_pairs = all_pairs[train_end:val_end]
+        test_pairs = all_pairs[val_end:]
+
+        print(f"\nSplit sizes:")
+        print(f"  Train: {len(train_pairs):,} ({len(train_pairs)/total_count:.1%})")
+        print(f"  Val:   {len(val_pairs):,} ({len(val_pairs)/total_count:.1%})")
+        print(f"  Test:  {len(test_pairs):,} ({len(test_pairs)/total_count:.1%})")
+
+        # Save each split
+        train_count = self._save_split(
+            train_pairs, output_dir, f"{prefix}_train", chunk_size
+        )
+        val_count = self._save_split(
+            val_pairs, output_dir, f"{prefix}_val", chunk_size
+        )
+        test_count = self._save_split(
+            test_pairs, output_dir, f"{prefix}_test", chunk_size
+        )
+
+        print(f"\n✓ Saved splits to {output_dir}")
+        return train_count, val_count, test_count
+
+    def _save_split(
+        self,
+        pairs: List[Dict],
+        output_dir: Path,
+        prefix: str,
+        chunk_size: int,
+    ) -> int:
+        """
+        Save a data split to chunked JSONL files.
+
+        Args:
+            pairs: List of paired data
+            output_dir: Output directory
+            prefix: File prefix
+            chunk_size: Number of pairs per chunk
+
+        Returns:
+            Number of pairs saved
+        """
+        total_count = 0
+        chunk_num = 0
+
+        for i in range(0, len(pairs), chunk_size):
+            chunk = pairs[i:i + chunk_size]
+            chunk_num += 1
+
+            chunk_file = output_dir / f"{prefix}_chunk_{chunk_num:03d}.jsonl"
+
+            with open(chunk_file, "w", encoding="utf-8") as f:
+                for pair in chunk:
+                    f.write(json.dumps(pair, ensure_ascii=False) + "\n")
+
+            total_count += len(chunk)
+
         return total_count
 
 
