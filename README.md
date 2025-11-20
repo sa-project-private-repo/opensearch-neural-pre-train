@@ -72,23 +72,29 @@ Complete end-to-end pipeline from data collection to model training:
 
 ```
 opensearch-neural-pre-train/
-├── config/                              # ⚙️ Configuration files
-│   └── training_config.yaml             # Training hyperparameters
+├── configs/                             # ⚙️ Training configurations
+│   ├── pretrain_korean.yaml             # Pre-training on Korean data
+│   └── finetune_msmarco.yaml            # Fine-tuning on MS MARCO
 │
 ├── dataset/                             # 📊 Data storage
-│   ├── base_model/                      # QD pairs and documents
+│   ├── paired_data_split/               # Train/val/test split data
 │   ├── synonyms/                        # Korean-English synonyms
-│   ├── wikipedia/                       # Wikipedia data (optional)
-│   └── training/                        # Processed training data
+│   ├── wikipedia/                       # Wikipedia raw data
+│   ├── pretraining/                     # S2ORC, GOOAQ, WikiAnswers
+│   ├── hard_negatives/                  # BM25-mined hard negatives
+│   └── msmarco/                         # MS MARCO triples
 │
 ├── models/                              # 🤖 Trained models (gitignored)
 │   └── [saved models here]
 │
 ├── notebooks/                           # 📓 Jupyter notebooks
-│   ├── pretraining-neural-sparse-model/ # Neural Sparse pre-training workflow
-│   │   ├── 01_wikipedia_data_extraction.ipynb
-│   │   ├── 02_synonym_extraction.ipynb
-│   │   └── 03_model_pretraining.ipynb
+│   ├── pretraining-neural-sparse-model/ # SPLADE-doc training workflow
+│   │   ├── 01_wikipedia_data_extraction.ipynb  # Wikipedia data extraction
+│   │   ├── 02_synonym_extraction.ipynb         # Synonym extraction
+│   │   ├── 03_model_pretraining.ipynb         # Pre-training data prep
+│   │   ├── 04_hard_negative_mining.ipynb      # BM25 hard negatives
+│   │   ├── 05_msmarco_preparation.ipynb       # MS MARCO fine-tuning data
+│   │   └── 06_model_training_baseline.ipynb   # Baseline training (10K samples)
 │   └── legacy/                          # Legacy notebooks
 │
 ├── outputs/                             # 📤 Training outputs
@@ -101,13 +107,14 @@ opensearch-neural-pre-train/
 │
 ├── src/                                 # 💻 Source code
 │   ├── data/                            # Data processing
-│   │   ├── wikipedia_parser.py
-│   │   ├── synonym_extractor.py
-│   │   ├── simple_synonym_builder.py
-│   │   └── training_data_builder.py
-│   ├── models/                          # Model architecture
-│   │   └── neural_sparse_encoder.py
-│   └── training/                        # Training infrastructure
+│   │   ├── wikipedia_parser.py          # Wikipedia XML parser
+│   │   ├── synonym_extractor.py         # Synonym extraction
+│   │   ├── paired_data_generator.py     # (Query, Document) pair generation
+│   │   └── dataset.py                   # PyTorch dataset loaders
+│   ├── model/                           # SPLADE-doc model architecture
+│   │   ├── splade_model.py              # SPLADE-doc implementation
+│   │   └── losses.py                    # Loss functions (InfoNCE, FLOPS, IDF, KD)
+│   └── training/                        # Training infrastructure (legacy)
 │       ├── losses.py
 │       ├── data_collator.py
 │       └── trainer.py
@@ -115,22 +122,53 @@ opensearch-neural-pre-train/
 ├── tests/                               # 🧪 Test scripts
 │   └── test_training_pipeline.py
 │
+├── train.py                             # 🚀 Production training script
 ├── plan.md                              # 📋 Project plan
 └── README.md                            # 📄 This file
 ```
 
 ## 🚀 빠른 시작
 
-> 💡 **src 모듈 사용법**: 모든 함수를 직접 import하여 사용할 수 있습니다. 자세한 예제는 [USAGE_EXAMPLES.md](USAGE_EXAMPLES.md)를 참조하세요.
+### Option 1: Baseline Training (권장 - 빠른 테스트)
 
-```python
-# 간편한 import
-from src import (
-    load_korean_news_with_dates,
-    calculate_temporal_idf,
-    neural_sparse_loss_with_regularization,
-    build_comprehensive_bilingual_dictionary,
-)
+```bash
+# Jupyter 노트북으로 베이스라인 학습 (10K samples)
+jupyter notebook notebooks/pretraining-neural-sparse-model/06_model_training_baseline.ipynb
+```
+
+**특징**:
+- Korean Wikipedia (5K) + NamuWiki (5K) 샘플링
+- 3 epochs, ~10분 학습 시간 (GPU)
+- 전체 파이프라인 이해에 최적
+
+### Option 2: Production Training (대규모 학습)
+
+```bash
+# 1단계: Pre-training on Korean data
+python train.py --config configs/pretrain_korean.yaml
+
+# 2단계: Fine-tuning on MS MARCO
+python train.py --config configs/finetune_msmarco.yaml
+```
+
+**특징**:
+- Full dataset: Korean Wikipedia (~600K) + NamuWiki (~1.5M) + 모두의말뭉치
+- Multi-GPU 지원
+- Checkpoint 저장 및 재개 가능
+
+### Training Pipeline 전체 실행
+
+```bash
+# 1. Data Collection (notebooks 01-05)
+jupyter notebook notebooks/pretraining-neural-sparse-model/01_wikipedia_data_extraction.ipynb
+jupyter notebook notebooks/pretraining-neural-sparse-model/02_synonym_extraction.ipynb
+# ... (03, 04, 05)
+
+# 2. Model Training
+python train.py --config configs/pretrain_korean.yaml
+
+# 3. Evaluation on BEIR
+python evaluate.py --model outputs/pretrain_korean/best_model
 ```
 
 ### ARM 시스템 (Apple Silicon, ARM 서버)
