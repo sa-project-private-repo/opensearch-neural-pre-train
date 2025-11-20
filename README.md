@@ -1,14 +1,43 @@
 # OpenSearch Neural Sparse Pre-training
 
-Korean-English cross-lingual Neural Sparse model for OpenSearch retrieval.
+Korean-English cross-lingual SPLADE-doc model for OpenSearch retrieval.
 
 ## Project Overview
 
-This project implements a Neural Sparse encoder optimized for Korean-English bilingual search, trained with:
-- 27,939 query-document pairs
-- 74 Korean-English synonym pairs
-- Cross-lingual alignment objectives
-- FLOPS-based sparsity regularization
+This project implements **SPLADE-doc** (Sparse Lexical and Expansion model - Document-only mode), an inference-free learned sparse retrieval model optimized for Korean-English bilingual search.
+
+### Training Pipeline
+
+Complete end-to-end pipeline from data collection to model training:
+
+**Data Collection (Notebooks 01-05)**:
+- **01**: Wikipedia data extraction (Korean ~600K articles, English ~6M articles)
+- **02**: Synonym extraction from Wikipedia
+- **03**: Pre-training data preparation (S2ORC, WikiAnswers, GOOAQ)
+- **04**: Hard negative mining with BM25
+- **05**: MS MARCO fine-tuning data
+
+**Model Training**:
+- **06**: Baseline training (10K sampled pairs from Korean Wikipedia + NamuWiki)
+- **train.py**: Production-scale training script with full dataset
+- **configs/**: YAML configurations for pre-training and fine-tuning
+
+### Training Data Scale
+
+- **Korean Wikipedia**: ~600,000 articles (title-summary, title-paragraph pairs)
+- **NamuWiki**: ~1,500,000 articles (Korean encyclopedia)
+- **모두의 말뭉치**: Korean corpus for enhanced language understanding
+- **English Wikipedia**: ~6,000,000 articles (for bilingual capability)
+- **S2ORC, WikiAnswers, GOOAQ**: Additional pre-training corpora
+- **MS MARCO**: Fine-tuning dataset for ranking optimization
+
+### Architecture
+
+- **Base Model**: `bert-base-multilingual-cased` (Korean + English support)
+- **Token Importance Prediction**: log(1 + ReLU(·)) for sparsity
+- **Sparse Representation**: Max pooling over token positions
+- **Loss Functions**: InfoNCE + FLOPS regularization + IDF penalty + Knowledge Distillation
+- **Training Strategy**: Pre-training on Korean/English data → Fine-tuning on MS MARCO
 
 ### 🌟 v0.3.0 주요 개선사항
 
