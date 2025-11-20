@@ -1,0 +1,72 @@
+# Pre-training configuration for SPLADE-doc
+# Optimized for Nvidia DGX Spark (ARM + GB10 GPU)
+# GPU: GB10 (119.70 GB VRAM, BF16 support)
+
+model:
+  name: "bert-base-multilingual-cased"  # Supports Korean + English
+  use_idf: false  # Will enable after computing IDF weights
+  dropout: 0.1
+  # resume_from: null  # Path to checkpoint to resume from
+
+data:
+  # Training data patterns (maximizing Korean data usage)
+  train_patterns:
+    # Korean Wikipedia (01 notebook)
+    - "dataset/paired_data_split/ko_wiki_title_summary_*_train_*.jsonl"
+    - "dataset/paired_data_split/ko_wiki_title_paragraph_*_train_*.jsonl"
+    # NamuWiki (01 notebook)
+    - "dataset/paired_data_split/namuwiki_title_summary_*_train_*.jsonl"
+    - "dataset/paired_data_split/namuwiki_title_paragraph_*_train_*.jsonl"
+    # 모두의 말뭉치 (01 notebook)
+    - "dataset/paired_data_split/modu_*_train_*.jsonl"
+    # English Wikipedia (for bilingual capability)
+    - "dataset/paired_data_split/en_wiki_title_summary_*_train_*.jsonl"
+
+  # Validation data patterns
+  val_patterns:
+    - "dataset/paired_data_split/ko_wiki_*_val_*.jsonl"
+    - "dataset/paired_data_split/namuwiki_*_val_*.jsonl"
+    - "dataset/paired_data_split/en_wiki_*_val_*.jsonl"
+
+  batch_size: 32  # Increased for GB10 (119GB VRAM)
+  max_length: 256
+  num_negatives: 7  # Number of hard negatives per query
+  num_workers: 8
+  use_hard_negatives: false  # Set true if using mined negatives from 04
+
+loss:
+  temperature: 0.05  # Contrastive loss temperature
+  lambda_flops: 1e-4  # FLOPS regularization
+  lambda_idf: 1e-3  # IDF-aware penalty
+  lambda_kd: 0.5  # Knowledge distillation weight
+  use_kd: false  # Enable for teacher-student training
+  use_idf_penalty: false  # Enable after computing IDF weights
+
+training:
+  num_epochs: 10
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 5000
+  gradient_accumulation_steps: 2  # Effective batch size = 32 * 2 = 64
+  max_grad_norm: 1.0
+
+  # Mixed precision training (GB10 supports BF16)
+  mixed_precision: "bf16"  # Use BF16 for Blackwell architecture
+
+  # Optimization for ARM + GB10
+  compile_mode: false  # torch.compile may not be stable on ARM yet
+  gradient_checkpointing: false  # Disable for now, plenty of VRAM
+
+  # Logging and checkpointing
+  log_steps: 100
+  save_epochs: 1
+  output_dir: "outputs/pretrain_korean_dgx"
+
+device: "cuda"  # GB10 GPU
+
+# ARM + GB10 Optimization Notes:
+# 1. BF16 mixed precision for faster training on Blackwell
+# 2. Larger batch size (32) utilizing 119GB VRAM
+# 3. gradient_accumulation_steps=2 for effective batch=64
+# 4. num_workers=8 for ARM CPU efficiency
+# 5. Gradient checkpointing disabled (plenty of memory)

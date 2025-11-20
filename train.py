@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 import yaml
@@ -75,6 +76,16 @@ class Trainer:
         self.global_step = 0
         self.current_epoch = 0
         self.best_val_loss = float('inf')
+
+        # Mixed precision training
+        self.mixed_precision = config['training'].get('mixed_precision', None)
+        self.scaler = None
+        if self.mixed_precision == 'fp16':
+            self.scaler = GradScaler()
+            logger.info("Using FP16 mixed precision training")
+        elif self.mixed_precision == 'bf16':
+            # BF16 doesn't need GradScaler
+            logger.info("Using BF16 mixed precision training")
 
         # Output directory
         self.output_dir = Path(config['training']['output_dir'])
@@ -248,15 +259,31 @@ class Trainer:
 
             # Backward
             loss = loss / train_config['gradient_accumulation_steps']
-            loss.backward()
+
+            if self.scaler is not None:
+                # FP16 with GradScaler
+                self.scaler.scale(loss).backward()
+            else:
+                # BF16 or FP32
+                loss.backward()
 
             # Update
             if (step + 1) % train_config['gradient_accumulation_steps'] == 0:
+                if self.scaler is not None:
+                    # FP16: unscale before clipping
+                    self.scaler.unscale_(self.optimizer)
+
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     train_config['max_grad_norm']
                 )
-                self.optimizer.step()
+
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+
                 self.scheduler.step()
                 self.optimizer.zero_grad()
 
@@ -277,33 +304,42 @@ class Trainer:
         return total_loss / num_batches
 
     def _train_step(self, batch: Dict) -> tuple:
-        """Single training step."""
-        # Encode query
-        query_repr, _ = self.model(
-            batch['query_input_ids'],
-            batch['query_attention_mask']
-        )
+        """Single training step with optional mixed precision."""
+        # Determine autocast dtype
+        autocast_dtype = None
+        if self.mixed_precision == 'bf16':
+            autocast_dtype = torch.bfloat16
+        elif self.mixed_precision == 'fp16':
+            autocast_dtype = torch.float16
 
-        # Encode positive document
-        pos_doc_repr, _ = self.model(
-            batch['pos_doc_input_ids'],
-            batch['pos_doc_attention_mask']
-        )
+        # Use autocast if mixed precision is enabled
+        with autocast(device_type='cuda', dtype=autocast_dtype, enabled=(autocast_dtype is not None)):
+            # Encode query
+            query_repr, _ = self.model(
+                batch['query_input_ids'],
+                batch['query_attention_mask']
+            )
 
-        # Encode negative documents
-        batch_size, num_neg, seq_len = batch['neg_doc_input_ids'].shape
-        neg_input_ids = batch['neg_doc_input_ids'].view(batch_size * num_neg, seq_len)
-        neg_attention_mask = batch['neg_doc_attention_mask'].view(batch_size * num_neg, seq_len)
+            # Encode positive document
+            pos_doc_repr, _ = self.model(
+                batch['pos_doc_input_ids'],
+                batch['pos_doc_attention_mask']
+            )
 
-        neg_doc_repr_flat, _ = self.model(neg_input_ids, neg_attention_mask)
-        neg_doc_repr = neg_doc_repr_flat.view(batch_size, num_neg, -1)
+            # Encode negative documents
+            batch_size, num_neg, seq_len = batch['neg_doc_input_ids'].shape
+            neg_input_ids = batch['neg_doc_input_ids'].view(batch_size * num_neg, seq_len)
+            neg_attention_mask = batch['neg_doc_attention_mask'].view(batch_size * num_neg, seq_len)
 
-        # Compute loss
-        loss, loss_dict = self.loss_fn(
-            query_repr,
-            pos_doc_repr,
-            neg_doc_repr,
-        )
+            neg_doc_repr_flat, _ = self.model(neg_input_ids, neg_attention_mask)
+            neg_doc_repr = neg_doc_repr_flat.view(batch_size, num_neg, -1)
+
+            # Compute loss
+            loss, loss_dict = self.loss_fn(
+                query_repr,
+                pos_doc_repr,
+                neg_doc_repr,
+            )
 
         return loss, loss_dict
 

@@ -1,0 +1,55 @@
+# Baseline training configuration for SPLADE-doc
+# Optimized for Nvidia DGX Spark (ARM + GB10 GPU)
+# Quick testing with 10K samples
+
+model:
+  name: "bert-base-multilingual-cased"
+  use_idf: false
+  dropout: 0.1
+
+data:
+  # Small sample for baseline (will be created in notebook 06)
+  train_patterns:
+    - "dataset/baseline_samples/train_*.jsonl"
+
+  val_patterns:
+    - "dataset/baseline_samples/val_*.jsonl"
+
+  batch_size: 16  # Moderate size for baseline
+  max_length: 256
+  num_negatives: 3  # Fewer negatives for baseline
+  num_workers: 4
+  use_hard_negatives: false
+
+loss:
+  temperature: 0.05
+  lambda_flops: 1e-4
+  lambda_idf: 1e-3
+  lambda_kd: 0.0
+  use_kd: false
+  use_idf_penalty: false
+
+training:
+  num_epochs: 3  # Quick training
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  gradient_accumulation_steps: 2  # Effective batch = 32
+  max_grad_norm: 1.0
+
+  # Mixed precision for speed
+  mixed_precision: "bf16"
+  compile_mode: false
+  gradient_checkpointing: false
+
+  log_steps: 50
+  save_epochs: 1
+  output_dir: "outputs/baseline_dgx"
+
+device: "cuda"
+
+# Baseline Notes:
+# - 10K samples (5K Korean Wikipedia + 5K NamuWiki)
+# - 3 epochs, ~10 minutes on GB10
+# - BF16 for faster training
+# - Perfect for testing the pipeline
