@@ -357,6 +357,253 @@ class SynonymAugmenter:
         return augmented
 
 
+class TemporalSynonymWeighter:
+    """
+    Apply temporal decay weighting to synonym occurrences.
+
+    When the same synonym meaning appears multiple times in a text,
+    later occurrences receive reduced weights based on their position.
+    """
+
+    def __init__(
+        self,
+        decay_factor: float = 0.7,
+        min_weight: float = 0.1,
+    ):
+        """
+        Initialize temporal weighter.
+
+        Args:
+            decay_factor: Weight decay factor for each repeat (0 < decay < 1)
+            min_weight: Minimum weight floor (prevents complete elimination)
+        """
+        self.decay_factor = decay_factor
+        self.min_weight = min_weight
+
+    def apply_temporal_weights(
+        self,
+        synonyms: List[Dict[str, str]],
+        text: str,
+    ) -> List[Dict[str, str]]:
+        """
+        Apply temporal weighting to synonyms based on their occurrence in text.
+
+        When the same synonym (or semantically overlapping synonyms) appear
+        multiple times, later occurrences get reduced weights.
+
+        Args:
+            synonyms: List of synonym dicts
+            text: Text to analyze for synonym occurrences
+
+        Returns:
+            Synonyms with added 'temporal_weight' field
+        """
+        # Track occurrences of each synonym pair
+        occurrence_tracker: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+
+        # Find all positions where each synonym appears
+        text_lower = text.lower()
+
+        for syn in synonyms:
+            korean = syn["korean"].lower()
+            english = syn["english"].lower()
+            key = (korean, english)
+
+            # Find all occurrences of both Korean and English terms
+            korean_positions = self._find_all_positions(text_lower, korean)
+            english_positions = self._find_all_positions(text_lower, english)
+
+            # Combine and sort positions
+            all_positions = sorted(korean_positions + english_positions)
+            occurrence_tracker[key] = all_positions
+
+        # Apply temporal weights
+        weighted_synonyms = []
+
+        for syn in synonyms:
+            korean = syn["korean"].lower()
+            english = syn["english"].lower()
+            key = (korean, english)
+
+            positions = occurrence_tracker[key]
+
+            if len(positions) == 0:
+                # Synonym not found in text
+                weighted_syn = syn.copy()
+                weighted_syn["temporal_weight"] = 1.0
+                weighted_synonyms.append(weighted_syn)
+            else:
+                # Create multiple entries with decay weights
+                for idx, position in enumerate(positions):
+                    # Calculate temporal weight: decay^occurrence_index
+                    weight = max(
+                        self.min_weight,
+                        self.decay_factor ** idx
+                    )
+
+                    weighted_syn = syn.copy()
+                    weighted_syn["temporal_weight"] = weight
+                    weighted_syn["occurrence_index"] = idx
+                    weighted_syn["position"] = position
+                    weighted_synonyms.append(weighted_syn)
+
+        return weighted_synonyms
+
+    def aggregate_temporal_weights(
+        self,
+        weighted_synonyms: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        """
+        Aggregate multiple occurrences back to unique synonyms with averaged weights.
+
+        Args:
+            weighted_synonyms: List of synonyms with temporal weights
+
+        Returns:
+            Deduplicated synonyms with aggregated temporal weights
+        """
+        synonym_map: Dict[Tuple[str, str], Dict] = {}
+
+        for syn in weighted_synonyms:
+            key = (syn["korean"].lower(), syn["english"].lower())
+
+            if key in synonym_map:
+                # Average the temporal weights
+                existing = synonym_map[key]
+                existing["temporal_weight"] = (
+                    existing["temporal_weight"] + syn["temporal_weight"]
+                ) / 2
+                existing["occurrence_count"] = existing.get("occurrence_count", 1) + 1
+            else:
+                result_syn = {
+                    "korean": syn["korean"],
+                    "english": syn["english"],
+                    "temporal_weight": syn["temporal_weight"],
+                    "occurrence_count": 1,
+                    "confidence": syn.get("confidence", 1.0),
+                    "sources": syn.get("sources", []),
+                }
+                synonym_map[key] = result_syn
+
+        return list(synonym_map.values())
+
+    def apply_semantic_overlap_penalty(
+        self,
+        synonyms: List[Dict[str, str]],
+        similarity_threshold: float = 0.8,
+    ) -> List[Dict[str, str]]:
+        """
+        Apply additional penalty for semantically overlapping synonyms.
+
+        When multiple synonyms have similar meanings (e.g., "AI" and "Artificial Intelligence"),
+        later occurrences in the list receive additional penalty.
+
+        Args:
+            synonyms: List of synonym dicts
+            similarity_threshold: Threshold for considering synonyms similar
+
+        Returns:
+            Synonyms with semantic overlap penalties applied
+        """
+        penalized = []
+        seen_english: List[str] = []
+        seen_korean: List[str] = []
+
+        for syn in synonyms:
+            korean = syn["korean"].lower()
+            english = syn["english"].lower()
+
+            # Check for semantic overlap with previously seen terms
+            overlap_penalty = 1.0
+
+            # Simple overlap detection: check for substring matches
+            for seen_en in seen_english:
+                if self._has_semantic_overlap(english, seen_en):
+                    overlap_penalty *= self.decay_factor
+
+            for seen_ko in seen_korean:
+                if self._has_semantic_overlap(korean, seen_ko):
+                    overlap_penalty *= self.decay_factor
+
+            # Apply penalty
+            penalized_syn = syn.copy()
+            penalized_syn["semantic_overlap_weight"] = max(self.min_weight, overlap_penalty)
+
+            # Combine with temporal weight if it exists
+            if "temporal_weight" in syn:
+                penalized_syn["combined_weight"] = (
+                    syn["temporal_weight"] * penalized_syn["semantic_overlap_weight"]
+                )
+            else:
+                penalized_syn["combined_weight"] = penalized_syn["semantic_overlap_weight"]
+
+            penalized.append(penalized_syn)
+
+            # Track seen terms
+            seen_english.append(english)
+            seen_korean.append(korean)
+
+        return penalized
+
+    def _find_all_positions(self, text: str, term: str) -> List[int]:
+        """
+        Find all starting positions of a term in text.
+
+        Args:
+            text: Text to search in
+            term: Term to find
+
+        Returns:
+            List of starting positions
+        """
+        positions = []
+        start = 0
+
+        while True:
+            pos = text.find(term, start)
+            if pos == -1:
+                break
+            positions.append(pos)
+            start = pos + 1
+
+        return positions
+
+    def _has_semantic_overlap(self, term1: str, term2: str) -> bool:
+        """
+        Check if two terms have semantic overlap.
+
+        Simple implementation using substring matching and abbreviation detection.
+
+        Args:
+            term1: First term
+            term2: Second term
+
+        Returns:
+            True if terms overlap semantically
+        """
+        # Check substring
+        if term1 in term2 or term2 in term1:
+            return True
+
+        # Check abbreviation (e.g., "AI" in "Artificial Intelligence")
+        words1 = term1.split()
+        words2 = term2.split()
+
+        if len(words1) == 1 and len(words2) > 1:
+            # Check if term1 is abbreviation of term2
+            abbrev = "".join(w[0] for w in words2 if w).lower()
+            if term1.lower() == abbrev:
+                return True
+
+        if len(words2) == 1 and len(words1) > 1:
+            # Check if term2 is abbreviation of term1
+            abbrev = "".join(w[0] for w in words1 if w).lower()
+            if term2.lower() == abbrev:
+                return True
+
+        return False
+
+
 if __name__ == "__main__":
     # Example usage
     extractor = SynonymExtractor()
