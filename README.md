@@ -123,11 +123,55 @@ opensearch-neural-pre-train/
 │   └── test_training_pipeline.py
 │
 ├── train.py                             # 🚀 Production training script
+├── Makefile                             # 📦 Build automation for easy training
+├── test_dgx_setup.py                    # 🧪 DGX environment test
+├── DGX_QUICKSTART.md                    # 📘 DGX Spark quick start guide
 ├── plan.md                              # 📋 Project plan
 └── README.md                            # 📄 This file
 ```
 
 ## 🚀 빠른 시작
+
+### ⚡ Makefile을 사용한 간편 실행 (권장)
+
+프로젝트에 Makefile이 포함되어 있어 한 줄 명령으로 모든 작업을 수행할 수 있습니다.
+
+```bash
+# 도움말 보기
+make help
+
+# 빠른 시작 (환경 테스트 + 데이터 준비 + 베이스라인 학습)
+make quickstart
+
+# 또는 단계별 실행
+make setup              # 환경 테스트
+make prepare-baseline   # 베이스라인 데이터 준비 (10K samples)
+make train-baseline     # 베이스라인 학습 (~10분)
+make train-pretrain     # 대규모 pre-training
+
+# 모니터링 및 로그
+make monitor           # GPU 사용률 실시간 모니터링
+make logs-baseline     # 베이스라인 학습 로그 확인
+make logs-pretrain     # Pre-training 로그 확인
+
+# 유틸리티
+make info              # 시스템 정보 확인
+make clean             # 출력 파일 정리
+make notebook          # Jupyter 노트북 시작
+```
+
+**Makefile 주요 타겟**:
+
+| 명령어 | 설명 | 예상 시간 |
+|--------|------|----------|
+| `make quickstart` | 전체 파이프라인 실행 (setup → prepare → train) | ~15분 |
+| `make prepare-baseline` | 10K 샘플 데이터 준비 | ~1분 |
+| `make train-baseline` | 베이스라인 학습 (BF16, batch=32) | ~10분 |
+| `make train-pretrain` | 대규모 pre-training (전체 데이터) | 수 시간 |
+| `make monitor` | GPU 사용률 모니터링 | - |
+| `make info` | 시스템 및 설정 정보 출력 | <1초 |
+
+---
 
 ### Option 1: Baseline Training (권장 - 빠른 테스트)
 
@@ -174,6 +218,21 @@ python evaluate.py --model outputs/pretrain_korean/best_model
 ### Nvidia DGX Spark (ARM + GB10 GPU) - 권장 환경
 
 **✨ DGX Spark에 최적화된 설정 제공!**
+
+**방법 1: Makefile 사용 (가장 간편)**
+
+```bash
+# 전체 파이프라인 한 번에 실행
+make quickstart
+
+# 또는 개별 실행
+make setup              # 환경 테스트
+make prepare-baseline   # 데이터 준비
+make train-baseline     # 베이스라인 학습
+make train-pretrain     # 대규모 학습
+```
+
+**방법 2: 직접 실행**
 
 ```bash
 # 1. venv 활성화
@@ -505,6 +564,11 @@ pip3 install torch --index-url https://download.pytorch.org/whl/cu118
 
 ## 📚 참고 자료
 
+### 프로젝트 가이드
+
+- **[Makefile 사용 가이드](MAKEFILE_GUIDE.md)** - Makefile 명령어 완전 가이드
+- **[DGX Spark 빠른 시작](DGX_QUICKSTART.md)** - DGX Spark 환경 최적화 가이드
+
 ### OpenSearch 공식 문서
 
 - [Neural Sparse Search](https://opensearch.org/docs/latest/search-plugins/neural-sparse-search/)
@@ -540,4 +604,14 @@ OpenSearch Korean Neural Sparse Model Team
 
 ---
 
-**🎉 시작하기**: `./setup_amazon_linux_2023.sh` 실행 후 `python3 demo_idf_korean.py`로 테스트하세요!
+**🎉 DGX Spark에서 시작하기**:
+
+```bash
+# 한 줄 명령으로 전체 실행
+make quickstart
+
+# 또는 단계별 실행
+make help  # 모든 명령어 확인
+```
+
+자세한 내용은 **[Makefile 가이드](MAKEFILE_GUIDE.md)** 참조!
