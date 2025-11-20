@@ -22,6 +22,7 @@ make quickstart
 ```
 
 이 명령은 다음을 자동으로 수행합니다:
+
 1. ✅ 환경 테스트 (`make setup`)
 2. ✅ 데이터 준비 (`make prepare-baseline`)
 3. ✅ 베이스라인 학습 (`make train-baseline`)
@@ -53,7 +54,8 @@ make test
 ```
 
 **출력 예시**:
-```
+
+```text
 ======================================================================
 Testing SPLADE-doc on Nvidia DGX Spark (ARM + GB10)
 ======================================================================
@@ -77,10 +79,12 @@ make prepare-baseline
 ```
 
 **생성되는 데이터**:
+
 - `dataset/baseline_samples/train_baseline.jsonl` (9,000 samples)
 - `dataset/baseline_samples/val_baseline.jsonl` (1,000 samples)
 
 **소스**:
+
 - Korean Wikipedia: 5,000 samples
 - NamuWiki: 5,000 samples
 
@@ -95,6 +99,7 @@ make train-baseline
 ```
 
 **설정**:
+
 - 데이터: 10K samples
 - Epochs: 3
 - Batch size: 16 (effective: 32)
@@ -110,6 +115,7 @@ make train-pretrain
 ```
 
 **설정**:
+
 - 데이터: 전체 Korean + English Wikipedia
 - Epochs: 10
 - Batch size: 32 (effective: 64)
@@ -125,6 +131,7 @@ make train-finetune
 ```
 
 **설정**:
+
 - 데이터: MS MARCO triples
 - Epochs: 3
 - Batch size: 8 (effective: 64)
@@ -144,7 +151,8 @@ make monitor
 ```
 
 **출력**:
-```
+
+```text
 Every 1.0s: nvidia-smi
 
 +-----------------------------------------------------------------------------------------+
@@ -174,6 +182,7 @@ make logs-finetune
 ```
 
 **로그 형식 (JSONL)**:
+
 ```json
 {"step": 100, "epoch": 0, "total": 8793.32, "contrastive": 8774.28, "flops": 19.04}
 {"step": 200, "epoch": 0, "total": 6234.56, "contrastive": 6220.12, "flops": 14.44}
@@ -289,11 +298,13 @@ make train-finetune
 ### 문제 1: venv가 없다는 오류
 
 **오류 메시지**:
-```
+
+```text
 Error: venv not found. Run: python3 -m venv .venv
 ```
 
 **해결 방법**:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -303,11 +314,13 @@ pip install -r requirements.txt
 ### 문제 2: 데이터 파일이 없음
 
 **오류 메시지**:
-```
+
+```text
 No files found matching pattern: dataset/paired_data_split/ko_wiki_*
 ```
 
 **해결 방법**:
+
 ```bash
 # 먼저 notebook 01을 실행하여 데이터 생성
 make notebook
@@ -318,20 +331,23 @@ make prepare-baseline
 ### 문제 3: CUDA Out of Memory
 
 **오류 메시지**:
-```
+
+```text
 RuntimeError: CUDA out of memory
 ```
 
 **해결 방법**:
 
-Option 1: 설정 파일에서 batch size 줄이기
+#### Option 1: 설정 파일에서 batch size 줄이기
+
 ```yaml
 # configs/baseline_dgx.yaml
 data:
   batch_size: 8  # 16 → 8로 줄이기
 ```
 
-Option 2: Gradient checkpointing 활성화
+#### Option 2: Gradient checkpointing 활성화
+
 ```yaml
 # configs/baseline_dgx.yaml
 training:
@@ -341,11 +357,13 @@ training:
 ### 문제 4: 로그 파일이 없음
 
 **오류 메시지**:
-```
+
+```text
 No logs found. Start training first with: make train-baseline
 ```
 
 **해결 방법**:
+
 ```bash
 # 먼저 학습을 시작해야 합니다
 make train-baseline
@@ -373,17 +391,20 @@ make train-pretrain
 
 ### 멀티 터미널 워크플로우
 
-**터미널 1** (학습):
+#### 터미널 1 (학습)
+
 ```bash
 make train-pretrain
 ```
 
-**터미널 2** (로그 모니터링):
+#### 터미널 2 (로그 모니터링)
+
 ```bash
 make logs-pretrain
 ```
 
-**터미널 3** (GPU 모니터링):
+#### 터미널 3 (GPU 모니터링)
+
 ```bash
 make monitor
 ```
@@ -435,4 +456,4 @@ echo "✓ All training completed!"
 
 ---
 
-**Happy Training with Makefile! 🚀**
+Happy Training with Makefile! 🚀
