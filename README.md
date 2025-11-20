@@ -171,6 +171,36 @@ python train.py --config configs/pretrain_korean.yaml
 python evaluate.py --model outputs/pretrain_korean/best_model
 ```
 
+### Nvidia DGX Spark (ARM + GB10 GPU) - 권장 환경
+
+**✨ DGX Spark에 최적화된 설정 제공!**
+
+```bash
+# 1. venv 활성화
+source .venv/bin/activate
+
+# 2. GPU 환경 테스트
+python test_dgx_setup.py
+
+# 3. 베이스라인 데이터 준비 (10K samples)
+python scripts/prepare_baseline_data.py
+
+# 4. 베이스라인 학습 (BF16, ~10분)
+python train.py --config configs/baseline_dgx.yaml
+
+# 5. 대규모 pre-training
+python train.py --config configs/pretrain_korean_dgx.yaml
+```
+
+**DGX 최적화**:
+- ✅ BF16 mixed precision (Blackwell 아키텍처 최적화)
+- ✅ 대용량 배치 (batch_size=32, 119GB VRAM 활용)
+- ✅ ARM64 아키텍처 지원
+- ✅ CUDA 13.0 + cuDNN 91300
+- ✅ PyTorch 2.10 (dev/nightly)
+
+---
+
 ### ARM 시스템 (Apple Silicon, ARM 서버)
 
 **⚠️ ARM 사용자는 [ARM_INSTALL.md](ARM_INSTALL.md)를 참조하세요!**

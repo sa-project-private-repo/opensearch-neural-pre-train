@@ -8,12 +8,12 @@ model:
   dropout: 0.1
 
 data:
-  # Small sample for baseline (will be created in notebook 06)
+  # Small sample for baseline (created by scripts/prepare_baseline_data.py)
   train_patterns:
-    - "dataset/baseline_samples/train_*.jsonl"
+    - "dataset/baseline_samples/train_baseline.jsonl"
 
   val_patterns:
-    - "dataset/baseline_samples/val_*.jsonl"
+    - "dataset/baseline_samples/val_baseline.jsonl"
 
   batch_size: 16  # Moderate size for baseline
   max_length: 256
