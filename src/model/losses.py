@@ -262,21 +262,23 @@ class SPLADELoss(nn.Module):
         contrastive = self.contrastive_loss(query_repr, pos_doc_repr, neg_doc_repr)
 
         # FLOPS regularization on documents
-        flops_doc = self.flops_reg(pos_doc_repr)
+        flops_pos = self.flops_reg(pos_doc_repr)
+        flops_neg = torch.tensor(0.0, device=query_repr.device)
         if neg_doc_repr is not None:
             batch_size, num_negs, vocab_size = neg_doc_repr.shape
-            flops_doc = flops_doc + self.flops_reg(
+            flops_neg = self.flops_reg(
                 neg_doc_repr.view(batch_size * num_negs, vocab_size)
             )
-
-        # Initialize total loss
-        total_loss = contrastive + flops_doc
+        flops_doc = flops_pos + flops_neg
 
         # Loss dictionary for logging
         loss_dict = {
             'contrastive': contrastive.item(),
             'flops': flops_doc.item(),
         }
+
+        # Collect all loss components
+        loss_components = [contrastive, flops_doc]
 
         # Knowledge distillation
         if self.use_kd and teacher_scores is not None:
@@ -292,20 +294,24 @@ class SPLADELoss(nn.Module):
             student_scores = torch.cat([pos_scores.unsqueeze(1), neg_scores], dim=1)
 
             kd = self.kd_loss(student_scores, teacher_scores)
-            total_loss = total_loss + self.lambda_kd * kd
+            loss_components.append(self.lambda_kd * kd)
             loss_dict['kd'] = kd.item()
 
         # IDF-aware penalty
         if self.use_idf_penalty:
-            idf_pen = self.idf_penalty(pos_doc_repr)
+            idf_pen_pos = self.idf_penalty(pos_doc_repr)
+            idf_pen_neg = torch.tensor(0.0, device=query_repr.device)
             if neg_doc_repr is not None:
                 batch_size, num_negs, vocab_size = neg_doc_repr.shape
-                idf_pen = idf_pen + self.idf_penalty(
+                idf_pen_neg = self.idf_penalty(
                     neg_doc_repr.view(batch_size * num_negs, vocab_size)
                 )
-            total_loss = total_loss + idf_pen
+            idf_pen = idf_pen_pos + idf_pen_neg
+            loss_components.append(idf_pen)
             loss_dict['idf_penalty'] = idf_pen.item()
 
+        # Sum all loss components (avoid inplace operations)
+        total_loss = sum(loss_components)
         loss_dict['total'] = total_loss.item()
 
         return total_loss, loss_dict
