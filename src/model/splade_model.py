@@ -92,24 +92,24 @@ class SPLADEDoc(nn.Module):
         batch_size, seq_len = input_ids.shape
         vocab_size = self.config.vocab_size
 
-        # Initialize sparse representation
-        sparse_repr = torch.zeros(
-            batch_size, vocab_size,
+        # Use vectorized operations (gradient-safe, no inplace operations)
+        # Create one-hot encoding using scatter (non-inplace version)
+        one_hot = torch.zeros(
+            batch_size, seq_len, vocab_size,
             device=input_ids.device,
             dtype=token_weights.dtype
-        )
+        ).scatter(2, input_ids.unsqueeze(-1), 1)
 
-        # Scatter max weights to vocabulary positions
-        for b in range(batch_size):
-            for pos in range(seq_len):
-                if attention_mask[b, pos] == 0:
-                    continue
-                token_id = input_ids[b, pos].item()
-                # Use max pooling (take maximum weight for each token)
-                sparse_repr[b, token_id] = torch.max(
-                    sparse_repr[b, token_id],
-                    token_weights[b, pos]
-                )
+        # Apply attention mask
+        mask = attention_mask.unsqueeze(-1).float()  # [batch, seq_len, 1]
+
+        # Broadcast token weights to vocabulary dimension
+        # masked_weights: [batch, seq_len, vocab_size]
+        masked_weights = token_weights.unsqueeze(-1) * one_hot * mask
+
+        # Max pooling: take max across sequence dimension
+        # sparse_repr: [batch, vocab_size]
+        sparse_repr, _ = masked_weights.max(dim=1)
 
         return sparse_repr, token_weights
 
