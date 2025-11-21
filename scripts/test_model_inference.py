@@ -100,11 +100,100 @@ class SPLADEInference:
 
         return model
 
+    def merge_subword_tokens_from_sequence(
+        self,
+        text: str,
+        sparse_repr: torch.Tensor,
+        top_k: int = 50,
+    ) -> Dict[str, float]:
+        """
+        Merge WordPiece subword tokens based on input sequence.
+
+        This method tokenizes the input text and merges consecutive
+        subword tokens (starting with ##) into complete words.
+
+        Args:
+            text: Input text
+            sparse_repr: Sparse representation tensor [vocab_size]
+            top_k: Number of top tokens to return
+
+        Returns:
+            Dictionary of merged tokens and their weights
+        """
+        # Tokenize input to get the actual token sequence
+        tokens = self.tokenizer.tokenize(text)
+        token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+
+        # Get weights for tokens in the sequence
+        token_to_weight = {}
+        merged_tokens = []
+
+        current_word = ""
+        current_weight = 0.0
+
+        for token, token_id in zip(tokens, token_ids):
+            weight = sparse_repr[token_id].item()
+
+            if token.startswith("##"):
+                # Continuation of previous word
+                current_word += token[2:]  # Remove ##
+                current_weight = max(current_weight, weight)  # Use max weight
+            else:
+                # New word - save previous if exists
+                if current_word and current_weight > 0:
+                    if current_word not in token_to_weight:
+                        token_to_weight[current_word] = current_weight
+                    else:
+                        token_to_weight[current_word] = max(
+                            token_to_weight[current_word],
+                            current_weight
+                        )
+
+                # Start new word
+                current_word = token
+                current_weight = weight
+
+        # Add last word
+        if current_word and current_weight > 0:
+            if current_word not in token_to_weight:
+                token_to_weight[current_word] = current_weight
+            else:
+                token_to_weight[current_word] = max(
+                    token_to_weight[current_word],
+                    current_weight
+                )
+
+        # Also include high-weight tokens not in sequence (for expansion)
+        top_vocab_tokens = self.model.get_top_k_tokens(
+            sparse_repr,
+            self.tokenizer,
+            k=top_k * 2,
+        )
+
+        for token, weight in top_vocab_tokens.items():
+            token = token.strip()
+            # Skip subword tokens when adding from vocab
+            if not token.startswith("##"):
+                if token not in token_to_weight:
+                    token_to_weight[token] = weight
+                else:
+                    token_to_weight[token] = max(token_to_weight[token], weight)
+
+        # Sort by weight and return top-k
+        sorted_tokens = sorted(
+            token_to_weight.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:top_k]
+
+        return dict(sorted_tokens)
+
     @torch.no_grad()
     def encode(
         self,
         text: str,
         max_length: int = 512,
+        merge_subwords: bool = True,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Encode text to sparse representation.
@@ -112,6 +201,7 @@ class SPLADEInference:
         Args:
             text: Input text
             max_length: Maximum sequence length
+            merge_subwords: Whether to merge WordPiece subword tokens
 
         Returns:
             sparse_repr: Sparse representation tensor
@@ -130,17 +220,24 @@ class SPLADEInference:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Encode
-        sparse_repr, token_weights = self.model(
+        sparse_repr, _ = self.model(
             inputs['input_ids'],
             inputs['attention_mask'],
         )
 
-        # Get top-k tokens
-        top_tokens = self.model.get_top_k_tokens(
-            sparse_repr[0],
-            self.tokenizer,
-            k=50,
-        )
+        # Get tokens (merged or raw)
+        if merge_subwords:
+            top_tokens = self.merge_subword_tokens_from_sequence(
+                text,
+                sparse_repr[0],
+                top_k=50,
+            )
+        else:
+            top_tokens = self.model.get_top_k_tokens(
+                sparse_repr[0],
+                self.tokenizer,
+                k=50,
+            )
 
         return sparse_repr[0], top_tokens
 
@@ -221,6 +318,11 @@ def main():
         default=None,
         help='Path to save results JSON (optional)'
     )
+    parser.add_argument(
+        '--no-merge-subwords',
+        action='store_true',
+        help='Disable subword token merging (show raw WordPiece tokens)'
+    )
 
     args = parser.parse_args()
 
@@ -252,7 +354,10 @@ def main():
 
     for sample in tqdm(test_samples, desc="Processing"):
         # Encode
-        sparse_repr, top_tokens = inference.encode(sample['text'])
+        sparse_repr, top_tokens = inference.encode(
+            sample['text'],
+            merge_subwords=not args.no_merge_subwords
+        )
 
         # Print results
         inference.print_top_tokens(
