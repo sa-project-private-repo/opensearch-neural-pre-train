@@ -22,7 +22,7 @@ NAMUWIKI_SAMPLES = 5000
 RANDOM_SEED = 42
 
 # Paths
-DATA_DIR = Path("dataset/paired_data_split")
+DATA_DIR = Path("dataset/paired_data")
 OUTPUT_DIR = Path("dataset/baseline_samples")
 
 random.seed(RANDOM_SEED)
@@ -58,8 +58,8 @@ def main():
     # 1. Load Korean Wikipedia data
     print("\n[1/4] Loading Korean Wikipedia data")
     ko_wiki_patterns = [
-        "ko_wiki_title_summary_*_train_*.jsonl",
-        "ko_wiki_title_paragraph_*_train_*.jsonl",
+        "ko_wiki_title_summary_*.jsonl",
+        "ko_wiki_title_paragraph_*.jsonl",
     ]
     ko_wiki_data = load_jsonl_files(ko_wiki_patterns)
     print(f"  Total Korean Wikipedia: {len(ko_wiki_data):,} samples")
@@ -67,8 +67,8 @@ def main():
     # 2. Load NamuWiki data
     print("\n[2/4] Loading NamuWiki data")
     namuwiki_patterns = [
-        "namuwiki_title_summary_*_train_*.jsonl",
-        "namuwiki_title_paragraph_*_train_*.jsonl",
+        "namuwiki_title_summary_*.jsonl",
+        "namuwiki_title_paragraph_*.jsonl",
     ]
     namuwiki_data = load_jsonl_files(namuwiki_patterns)
     print(f"  Total NamuWiki: {len(namuwiki_data):,} samples")
