@@ -107,14 +107,42 @@ def generate_synonym_pairs(
 
     training_pairs = []
 
+    # Priority Korean technical terms (must include)
+    priority_terms = [
+        "기계학습", "머신러닝", "machine learning",
+        "인공지능", "AI", "artificial intelligence",
+        "딥러닝", "deep learning", "심층학습",
+        "신경망", "neural network", "뉴럴네트워크",
+        "자연어처리", "NLP",
+        "컴퓨터비전", "computer vision",
+        "검색엔진", "search engine",
+        "빅데이터", "big data",
+    ]
+
     # Get all terms with synonyms
     terms_with_synonyms = [(term, syns) for term, syns in synonym_map.items()
                           if len(syns) > 0]
 
-    # Sample terms
-    sampled_terms = random.sample(
-        terms_with_synonyms,
-        min(num_samples, len(terms_with_synonyms))
+    # Separate priority and regular terms
+    priority_pairs = []
+    regular_pairs = []
+
+    for term, syns in terms_with_synonyms:
+        if term in priority_terms:
+            priority_pairs.append((term, syns))
+        else:
+            regular_pairs.append((term, syns))
+
+    print(f"  Priority terms: {len(priority_pairs)}")
+    print(f"  Regular terms: {len(regular_pairs)}")
+
+    # Sample: priority first, then random
+    num_priority = min(len(priority_pairs), num_samples // 2)  # Use half for priority
+    num_regular = min(len(regular_pairs), num_samples - num_priority)
+
+    sampled_terms = (
+        priority_pairs[:num_priority] +
+        random.sample(regular_pairs, num_regular)
     )
 
     for term, synonyms in tqdm(sampled_terms, desc="Generating pairs"):
