@@ -8,9 +8,11 @@ model:
   dropout: 0.1
 
 data:
-  # Small sample for baseline (created by scripts/prepare_baseline_data.py)
+  # Baseline + synonym pairs (11K samples)
+  # - 9K from baseline (Korean Wikipedia + NamuWiki)
+  # - 2K synonym pairs for term expansion learning
   train_patterns:
-    - "dataset/baseline_samples/train_baseline.jsonl"
+    - "dataset/baseline_samples/train_with_synonyms.jsonl"
 
   val_patterns:
     - "dataset/baseline_samples/val_baseline.jsonl"
@@ -23,7 +25,7 @@ data:
 
 loss:
   temperature: 0.05
-  lambda_flops: 0.0001
+  lambda_flops: 0.00001  # Relaxed from 0.0001 to allow term expansion
   lambda_idf: 0.001
   lambda_kd: 0.0
   use_kd: false
