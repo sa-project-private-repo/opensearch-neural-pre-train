@@ -23,7 +23,8 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 import yaml
