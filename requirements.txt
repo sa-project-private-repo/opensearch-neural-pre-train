@@ -55,6 +55,7 @@ hdbscan==0.8.39  # Advanced clustering (optional)
 
 # Configuration management
 pyyaml==6.0.2
+mwparserfromhell==0.6.6
 
 # LLM inference (ARM aarch64 compatible, Python 3.12)
 # Using FP8 quantization: Transformers 4.46.3+ native support, no external deps
