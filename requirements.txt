@@ -51,7 +51,7 @@ rank-bm25==0.2.2
 
 # Phase 4: Clustering for synonym discovery
 scipy==1.14.1  # For clustering algorithms
-hdbscan==0.8.38  # Advanced clustering (optional)
+hdbscan==0.8.39  # Advanced clustering (optional)
 
 # Configuration management
 pyyaml==6.0.2
