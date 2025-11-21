@@ -8,11 +8,11 @@ model:
   dropout: 0.1
 
 data:
-  # Baseline + synonym pairs (11K samples)
+  # Baseline + cross-lingual pairs (13.5K samples)
   # - 9K from baseline (Korean Wikipedia + NamuWiki)
-  # - 2K synonym pairs for term expansion learning
+  # - 4.5K cross-lingual pairs for term expansion learning
   train_patterns:
-    - "dataset/baseline_samples/train_with_synonyms.jsonl"
+    - "dataset/baseline_samples/train_with_crosslingual.jsonl"
 
   val_patterns:
     - "dataset/baseline_samples/val_baseline.jsonl"

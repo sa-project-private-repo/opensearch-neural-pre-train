@@ -16,9 +16,9 @@ models/
 # Training outputs (checkpoints, best models)
 outputs/
 
-datasets/
+datasets/*
 
-dataset/
+dataset/*
 
 # Legacy model paths (deprecated)
 opensearch-korean-neural-sparse-v1*
