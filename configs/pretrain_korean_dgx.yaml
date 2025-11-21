@@ -36,15 +36,15 @@ data:
 
 loss:
   temperature: 0.05  # Contrastive loss temperature
-  lambda_flops: 1e-4  # FLOPS regularization
-  lambda_idf: 1e-3  # IDF-aware penalty
+  lambda_flops: 0.0001  # FLOPS regularization
+  lambda_idf: 0.001  # IDF-aware penalty
   lambda_kd: 0.5  # Knowledge distillation weight
   use_kd: false  # Enable for teacher-student training
   use_idf_penalty: false  # Enable after computing IDF weights
 
 training:
   num_epochs: 10
-  learning_rate: 2e-5
+  learning_rate: 0.00002
   weight_decay: 0.01
   warmup_steps: 5000
   gradient_accumulation_steps: 2  # Effective batch size = 32 * 2 = 64

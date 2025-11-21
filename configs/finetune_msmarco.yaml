@@ -24,15 +24,15 @@ data:
 
 loss:
   temperature: 0.05
-  lambda_flops: 5e-5  # Reduced regularization for fine-tuning
-  lambda_idf: 5e-4
+  lambda_flops: 0.00005  # Reduced regularization for fine-tuning
+  lambda_idf: 0.0005
   lambda_kd: 0.0  # No KD for fine-tuning
   use_kd: false
   use_idf_penalty: true  # Enable IDF penalty
 
 training:
   num_epochs: 3  # Fewer epochs for fine-tuning
-  learning_rate: 1e-5  # Lower LR for fine-tuning
+  learning_rate: 0.00001  # Lower LR for fine-tuning
   weight_decay: 0.01
   warmup_steps: 1000
   gradient_accumulation_steps: 8  # Effective batch size = 8 * 8 = 64

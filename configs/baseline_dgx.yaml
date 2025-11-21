@@ -23,15 +23,15 @@ data:
 
 loss:
   temperature: 0.05
-  lambda_flops: 1e-4
-  lambda_idf: 1e-3
+  lambda_flops: 0.0001
+  lambda_idf: 0.001
   lambda_kd: 0.0
   use_kd: false
   use_idf_penalty: false
 
 training:
   num_epochs: 3  # Quick training
-  learning_rate: 2e-5
+  learning_rate: 0.00002
   weight_decay: 0.01
   warmup_steps: 500
   gradient_accumulation_steps: 2  # Effective batch = 32
