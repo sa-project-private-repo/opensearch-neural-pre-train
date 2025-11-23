@@ -48,13 +48,18 @@ class NeuralSparseDataCollator:
                 - english_term (optional): English synonym
 
         Returns:
-            Batch dict with tokenized inputs
+            Batch dict with tokenized inputs AND raw text for teacher models
         """
         batch = {}
 
         # Extract queries, positive docs, and negative docs
         queries = [f["query"] for f in features]
         pos_docs = [f["positive_doc"] for f in features]
+
+        # Store raw text for teacher model (knowledge distillation)
+        batch["queries"] = queries
+        batch["positive_docs"] = pos_docs
+        batch["negative_docs"] = [f["negative_docs"] for f in features]
 
         # Tokenize queries
         query_encoded = self.tokenizer(
