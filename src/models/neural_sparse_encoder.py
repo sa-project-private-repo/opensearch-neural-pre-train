@@ -265,34 +265,91 @@ class NeuralSparseEncoder(nn.Module):
         print(f"Model saved to {save_path}")
 
     @classmethod
-    def from_pretrained(cls, load_path: str) -> "NeuralSparseEncoder":
+    def from_pretrained(
+        cls,
+        load_path: str,
+        use_hf_hub: bool = True,
+    ) -> "NeuralSparseEncoder":
         """
-        Load model from directory.
+        Load model from directory or HuggingFace Hub.
 
         Args:
-            load_path: Directory containing saved model
+            load_path: Directory path or HuggingFace model ID
+            use_hf_hub: If True, try to load from HuggingFace Hub first
 
         Returns:
             Loaded NeuralSparseEncoder
         """
         import os
+        from pathlib import Path
 
-        # Load config
-        head_path = os.path.join(load_path, "neural_sparse_head.pt")
-        checkpoint = torch.load(head_path, map_location="cpu")
+        # Check if it's a local directory
+        is_local = Path(load_path).exists()
 
-        # Initialize model
-        model = cls(
-            model_name=checkpoint["model_name"],
-            max_length=checkpoint["max_length"],
-        )
+        if is_local:
+            # Load from local directory
+            head_path = os.path.join(load_path, "neural_sparse_head.pt")
+            if not os.path.exists(head_path):
+                raise FileNotFoundError(
+                    f"neural_sparse_head.pt not found in {load_path}. "
+                    f"Expected at: {head_path}"
+                )
 
-        # Load encoder (already loaded in __init__)
-        # Load projection layer
-        model.projection.load_state_dict(checkpoint["projection"])
+            checkpoint = torch.load(head_path, map_location="cpu")
 
-        print(f"Model loaded from {load_path}")
-        return model
+            # Initialize model
+            model = cls(
+                model_name=checkpoint["model_name"],
+                max_length=checkpoint["max_length"],
+            )
+
+            # Load projection layer
+            model.projection.load_state_dict(checkpoint["projection"])
+
+            print(f"Model loaded from {load_path}")
+            return model
+
+        else:
+            # Try to load from HuggingFace Hub
+            if use_hf_hub:
+                print(f"Loading from HuggingFace Hub: {load_path}")
+                try:
+                    from huggingface_hub import hf_hub_download
+
+                    # Download neural_sparse_head.pt from HF Hub
+                    head_path = hf_hub_download(
+                        repo_id=load_path,
+                        filename="neural_sparse_head.pt",
+                    )
+
+                    checkpoint = torch.load(head_path, map_location="cpu")
+
+                    # Initialize model
+                    model = cls(
+                        model_name=checkpoint["model_name"],
+                        max_length=checkpoint["max_length"],
+                    )
+
+                    # Load projection layer
+                    model.projection.load_state_dict(checkpoint["projection"])
+
+                    print(f"Model loaded from HuggingFace Hub: {load_path}")
+                    return model
+
+                except Exception as e:
+                    print(
+                        f"Failed to load from HuggingFace Hub: {e}\n"
+                        f"Attempting to initialize from base model..."
+                    )
+
+            # Fallback: Initialize from base model without pretrained head
+            print(
+                f"Initializing new model from base encoder: {load_path}\n"
+                f"Note: Projection layer will be randomly initialized"
+            )
+            model = cls(model_name=load_path)
+
+            return model
 
 
 if __name__ == "__main__":
