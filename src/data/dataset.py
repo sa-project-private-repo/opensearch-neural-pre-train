@@ -72,8 +72,16 @@ class PairedDataset(Dataset):
             return_tensors='pt'
         )
 
-        # Positive document
-        pos_doc = item['document']
+        # Positive document - support multiple formats
+        if 'document' in item:
+            pos_doc = item['document']
+        elif 'positive_doc' in item:
+            pos_doc = item['positive_doc']
+        elif 'pos' in item:
+            pos_doc = item['pos']
+        else:
+            raise KeyError(f"No document field found in item at index {idx}. Available keys: {list(item.keys())}")
+
         pos_doc_encoded = self.tokenizer(
             pos_doc,
             max_length=self.max_length,
@@ -112,7 +120,16 @@ class PairedDataset(Dataset):
         sampled_indices = random.sample(indices, min(self.num_negatives, len(indices)))
 
         for idx in sampled_indices:
-            negatives.append(self.data[idx]['document'])
+            # Support multiple data formats
+            item = self.data[idx]
+            if 'document' in item:
+                negatives.append(item['document'])
+            elif 'positive_doc' in item:
+                negatives.append(item['positive_doc'])
+            elif 'pos' in item:
+                negatives.append(item['pos'])
+            else:
+                raise KeyError(f"No document field found in item at index {idx}. Available keys: {list(item.keys())}")
 
         return negatives
 
@@ -121,7 +138,9 @@ class HardNegativesDataset(Dataset):
     """
     Dataset with pre-mined hard negatives.
 
-    Loads hard negatives from mining results.
+    Supports two formats:
+    1. {"query": "...", "positive_doc": "...", "hard_negatives": [...]}
+    2. {"query": "...", "pos": "...", "negs": [...]}  # GitHub sample format
     """
 
     def __init__(
@@ -173,8 +192,14 @@ class HardNegativesDataset(Dataset):
             return_tensors='pt'
         )
 
-        # Positive document
-        pos_doc = item['positive_doc']
+        # Positive document (support both formats)
+        if 'pos' in item:
+            pos_doc = item['pos']  # GitHub sample format
+        elif 'positive_doc' in item:
+            pos_doc = item['positive_doc']  # Our format
+        else:
+            raise KeyError(f"Missing positive document field in item: {item.keys()}")
+
         pos_doc_encoded = self.tokenizer(
             pos_doc,
             max_length=self.max_length,
@@ -183,8 +208,14 @@ class HardNegativesDataset(Dataset):
             return_tensors='pt'
         )
 
-        # Hard negatives
-        hard_negatives = item['hard_negatives']
+        # Hard negatives (support both formats)
+        if 'negs' in item:
+            hard_negatives = item['negs']  # GitHub sample format
+        elif 'hard_negatives' in item:
+            hard_negatives = item['hard_negatives']  # Our format
+        else:
+            raise KeyError(f"Missing negatives field in item: {item.keys()}")
+
         neg_docs_encoded = self.tokenizer(
             hard_negatives,
             max_length=self.max_length,

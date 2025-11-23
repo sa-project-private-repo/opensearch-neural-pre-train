@@ -249,7 +249,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--config',
         type=str,
-        default='config/training_config.yaml',
+        default='configs/training_config.yaml',
         help='Path to training config file',
     )
     args = parser.parse_args()

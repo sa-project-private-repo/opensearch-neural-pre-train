@@ -25,7 +25,7 @@ def main():
     print("=" * 80)
 
     # Load config
-    with open('config/training_config.yaml', 'r') as f:
+    with open('configs/training_config.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
     print("\n1. Loading configuration...")
