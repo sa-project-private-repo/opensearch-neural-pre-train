@@ -151,3 +151,177 @@ dataset/
 - [ ] 각 query당 positive 1개 + hard negatives 5~7개 포함
 - [ ] Score 분포가 합리적 (positive > hard negatives > easy negatives)
 - [ ] 노트북 실행 시간 < 2시간 (전체 데이터 기준)
+
+---
+
+# Phase 2: Cross-lingual Knowledge Distillation
+
+## 목표
+- 한국어 토큰과 영어 동의어가 유사한 sparse representation을 갖도록 학습
+- "학습" ↔ "training", "learning"
+- "머신러닝" ↔ "machine learning"
+
+## 현재 문제점
+
+### 1. 서브워드 분절 (Subword Tokenization)
+```
+Input: "머신러닝"
+Activated: 머신(0.49), ##닝(0.47), ##러(0.27)
+Missing: machine, learning, ML
+```
+
+### 2. 크로스-링궈 정렬 부재
+- 한국어 "학습"과 영어 "training"이 연결되지 않음
+- 학습 결과 영어 term activation 37.5% 성공률
+
+## 해결 방안: Cross-lingual Knowledge Distillation
+
+### 핵심 아이디어
+```
+Teacher (mE5-large):
+  encode("머신러닝") ≈ encode("machine learning")  # 이미 정렬됨
+
+Student (SPLADEDoc):
+  sparse("머신러닝") → [머신, ##러, ##닝, machine, learning]  # 목표
+```
+
+다국어 Teacher 모델(mE5)이 이미 한-영 동의어를 같은 임베딩 공간에 배치하므로,
+이 지식을 Student sparse 모델에 전이하여 cross-lingual token activation을 학습
+
+## 구현 체크리스트
+
+### Step 1: 한-영 동의어 데이터셋 구축
+- [ ] IT/ML 기술 용어 한영 사전 수집 (최소 5,000쌍)
+  - [ ] Wikipedia interlanguage links 추출
+  - [ ] Wikidata entity alignment 활용
+  - [ ] 수동 큐레이션 (핵심 용어 100개)
+- [ ] 데이터 포맷:
+  ```json
+  {
+    "ko": "머신러닝",
+    "en": ["machine learning", "ML"],
+    "category": "ML"
+  }
+  ```
+- [ ] 동의어 쌍 JSONL 생성
+- [ ] 품질 검증 (샘플 100개 수동 확인)
+
+### Step 2: Cross-lingual Loss 함수 구현
+- [ ] `src/training/losses.py` 수정
+- [ ] `CrossLingualKDLoss` 클래스 구현
+  ```python
+  class CrossLingualKDLoss(nn.Module):
+      """
+      Teacher의 cross-lingual alignment를 Student에 전이
+
+      Loss = KL_div(student_sparse, teacher_dense_projected)
+           + cosine_loss(sparse_ko, sparse_en_synonym)
+      """
+  ```
+- [ ] `SynonymAlignmentLoss` 클래스 구현
+  ```python
+  class SynonymAlignmentLoss(nn.Module):
+      """
+      한-영 동의어 쌍이 유사한 sparse activation을 갖도록 학습
+
+      Loss = 1 - cosine_sim(sparse("학습"), sparse("training"))
+      """
+  ```
+- [ ] 기존 CombinedLoss에 통합
+
+### Step 3: 학습 데이터 확장
+- [ ] 한-영 병렬 문장 데이터 추가
+  - [ ] OPUS-100 한-영 코퍼스 (서브셋)
+  - [ ] Tatoeba 한-영 문장 쌍
+- [ ] 데이터 로더 수정
+  - [ ] 동의어 쌍 샘플링 추가
+  - [ ] 배치 구성: [일반 쿼리-문서] + [동의어 쌍]
+
+### Step 4: 학습 파이프라인 수정
+- [ ] `02_training_*.ipynb` 수정
+  - [ ] mE5-large Teacher 로딩 추가
+  - [ ] 동의어 데이터 로더 추가
+  - [ ] Cross-lingual loss weight 설정 (lambda_xl = 0.1)
+- [ ] CONFIG 업데이트:
+  ```python
+  CONFIG['loss']['use_cross_lingual'] = True
+  CONFIG['loss']['lambda_cross_lingual'] = 0.1
+  CONFIG['loss']['synonym_data_path'] = 'dataset/synonyms/ko_en_terms.jsonl'
+  ```
+
+### Step 5: 평가 메트릭 추가
+- [ ] `03_inference_test_korean.ipynb` 수정
+- [ ] Cross-lingual Retrieval 평가
+  - [ ] 한국어 쿼리 → 영어 문서 검색 정확도
+  - [ ] MRR@10, Recall@100
+- [ ] 동의어 Activation 테스트
+  - [ ] 입력: "머신러닝" → 기대: machine, learning 토큰 활성화
+  - [ ] 입력: "학습" → 기대: training 토큰 활성화
+  - [ ] Activation overlap 비율 측정
+
+### Step 6: 학습 실행 및 튜닝
+- [ ] Baseline + Cross-lingual 학습 실행
+- [ ] Hyperparameter 튜닝
+  - [ ] lambda_cross_lingual: [0.05, 0.1, 0.2]
+  - [ ] synonym_batch_ratio: [0.1, 0.2, 0.3]
+- [ ] 결과 비교 분석
+
+## 예상 결과
+
+### Before (현재 모델)
+```
+Input: "머신러닝"
+Top-5 Activated:
+  머신: 0.49
+  ##닝: 0.47
+  ##러: 0.27
+  ...
+English Activation: 0%
+```
+
+### After (Cross-lingual KD 적용 후)
+```
+Input: "머신러닝"
+Top-10 Activated:
+  머신: 0.49
+  ##닝: 0.47
+  machine: 0.35
+  learning: 0.30
+  ##러: 0.27
+  ML: 0.22
+  ...
+English Activation: 60%+
+```
+
+## 파일 구조
+
+```
+dataset/
+├── synonyms/
+│   ├── ko_en_terms.jsonl        # 한-영 기술 용어
+│   ├── ko_en_parallel.jsonl     # 병렬 문장
+│   └── metadata.json
+
+src/training/
+├── losses.py                    # CrossLingualKDLoss 추가
+└── data_collator.py             # 동의어 샘플링 추가
+
+notebooks/opensearch-neural-v2/
+├── 01_data_preparation_*.ipynb  # 동의어 데이터 생성 섹션 추가
+├── 02_training_*.ipynb          # Cross-lingual 학습 추가
+└── 03_inference_*.ipynb         # Cross-lingual 평가 추가
+```
+
+## 참고 자료
+
+- [Multilingual E5](https://huggingface.co/intfloat/multilingual-e5-large)
+- [Cross-lingual SPLADE](https://arxiv.org/abs/2212.09114)
+- [Distilling Cross-lingual to Sparse](https://arxiv.org/abs/2204.06745)
+- [OPUS-100 Dataset](https://opus.nlpl.eu/)
+
+## 성공 기준
+
+- [ ] 동의어 쌍 데이터 최소 5,000쌍 생성
+- [ ] Cross-lingual retrieval MRR@10 > 0.3
+- [ ] 영어 동의어 activation rate > 50%
+- [ ] 기존 한국어 retrieval 성능 유지 (regression 없음)
