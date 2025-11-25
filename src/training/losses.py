@@ -177,6 +177,174 @@ class CrossLingualLoss(nn.Module):
         return loss
 
 
+class CrossLingualKDLoss(nn.Module):
+    """
+    Cross-lingual Knowledge Distillation Loss.
+
+    Uses a multilingual dense teacher model (e.g., mE5-large) to guide
+    the sparse student model to learn cross-lingual alignment.
+
+    The teacher already encodes Korean and English synonyms to similar
+    embeddings. This loss transfers that knowledge to the sparse model.
+    """
+
+    def __init__(
+        self,
+        temperature: float = 1.0,
+        loss_type: str = "kl",
+    ):
+        """
+        Initialize cross-lingual KD loss.
+
+        Args:
+            temperature: Temperature for softening distributions
+            loss_type: Type of KD loss ('kl', 'mse', 'cosine')
+        """
+        super().__init__()
+        self.temperature = temperature
+        self.loss_type = loss_type
+
+    def forward(
+        self,
+        student_rep: torch.Tensor,
+        teacher_rep: torch.Tensor,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        """
+        Compute KD loss between student sparse and teacher dense representations.
+
+        Args:
+            student_rep: Student sparse representations [batch_size, vocab_size]
+            teacher_rep: Teacher dense representations [batch_size, hidden_size]
+            normalize: Whether to normalize representations
+
+        Returns:
+            KD loss scalar
+        """
+        if normalize:
+            student_rep = F.normalize(student_rep, p=2, dim=-1)
+            teacher_rep = F.normalize(teacher_rep, p=2, dim=-1)
+
+        if self.loss_type == "kl":
+            # Softmax with temperature
+            student_soft = F.log_softmax(student_rep / self.temperature, dim=-1)
+            teacher_soft = F.softmax(teacher_rep / self.temperature, dim=-1)
+
+            # KL divergence
+            loss = F.kl_div(
+                student_soft,
+                teacher_soft,
+                reduction="batchmean",
+            ) * (self.temperature ** 2)
+
+        elif self.loss_type == "mse":
+            # Mean squared error (requires same dimensions)
+            loss = F.mse_loss(student_rep, teacher_rep)
+
+        elif self.loss_type == "cosine":
+            # Cosine similarity loss
+            similarity = F.cosine_similarity(student_rep, teacher_rep, dim=-1)
+            loss = (1.0 - similarity).mean()
+
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}")
+
+        return loss
+
+
+class SynonymAlignmentLoss(nn.Module):
+    """
+    Synonym Alignment Loss for cross-lingual term matching.
+
+    Ensures that synonymous terms (e.g., "머신러닝" and "machine learning")
+    activate similar tokens in the sparse representation.
+
+    Key insight: If teacher encodes KO and EN synonyms similarly,
+    we want sparse model to also produce similar activations.
+    """
+
+    def __init__(
+        self,
+        alignment_type: str = "overlap",
+        top_k: int = 50,
+        margin: float = 0.5,
+    ):
+        """
+        Initialize synonym alignment loss.
+
+        Args:
+            alignment_type: Type of alignment ('overlap', 'cosine', 'contrastive')
+            top_k: Number of top tokens to consider for overlap
+            margin: Margin for contrastive alignment
+        """
+        super().__init__()
+        self.alignment_type = alignment_type
+        self.top_k = top_k
+        self.margin = margin
+
+    def forward(
+        self,
+        korean_rep: torch.Tensor,
+        english_rep: torch.Tensor,
+        negative_rep: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute synonym alignment loss.
+
+        Args:
+            korean_rep: Korean term sparse rep [batch_size, vocab_size]
+            english_rep: English synonym sparse rep [batch_size, vocab_size]
+            negative_rep: Optional non-synonym rep for contrastive
+
+        Returns:
+            Alignment loss scalar
+        """
+        if self.alignment_type == "overlap":
+            # Token overlap loss
+            # Encourage both to activate same vocabulary tokens
+            ko_activated = (korean_rep > 0).float()
+            en_activated = (english_rep > 0).float()
+
+            # Jaccard-like overlap
+            intersection = (ko_activated * en_activated).sum(dim=-1)
+            union = torch.clamp(ko_activated + en_activated, 0, 1).sum(dim=-1)
+
+            overlap = intersection / (union + 1e-8)
+            loss = (1.0 - overlap).mean()
+
+        elif self.alignment_type == "cosine":
+            # Cosine similarity
+            similarity = F.cosine_similarity(korean_rep, english_rep, dim=-1)
+            loss = (1.0 - similarity).mean()
+
+        elif self.alignment_type == "contrastive":
+            # Contrastive loss with margin
+            pos_sim = F.cosine_similarity(korean_rep, english_rep, dim=-1)
+
+            if negative_rep is not None:
+                neg_sim = F.cosine_similarity(korean_rep, negative_rep, dim=-1)
+                # Margin ranking: pos should be > neg + margin
+                loss = torch.relu(self.margin + neg_sim - pos_sim).mean()
+            else:
+                loss = (1.0 - pos_sim).mean()
+
+        elif self.alignment_type == "soft_overlap":
+            # Soft overlap using min of activation values
+            min_activation = torch.minimum(korean_rep, english_rep)
+            max_activation = torch.maximum(korean_rep, english_rep)
+
+            soft_intersection = min_activation.sum(dim=-1)
+            soft_union = max_activation.sum(dim=-1)
+
+            soft_overlap = soft_intersection / (soft_union + 1e-8)
+            loss = (1.0 - soft_overlap).mean()
+
+        else:
+            raise ValueError(f"Unknown alignment_type: {self.alignment_type}")
+
+        return loss
+
+
 class FLOPSLoss(nn.Module):
     """
     FLOPS regularization loss for sparsity.
