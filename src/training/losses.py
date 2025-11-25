@@ -377,6 +377,118 @@ class SynonymAlignmentLoss(nn.Module):
         return loss
 
 
+class TokenExpansionLoss(nn.Module):
+    """
+    Token Expansion Loss for cross-lingual token activation.
+
+    This loss directly encourages Korean input to activate English tokens
+    by using the English synonym's activated tokens as targets.
+
+    Key insight: When "머신러닝" is input, we want the model to also
+    activate tokens that would be activated by "machine learning".
+    """
+
+    def __init__(
+        self,
+        expansion_type: str = "soft_target",
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+    ):
+        """
+        Initialize token expansion loss.
+
+        Args:
+            expansion_type: Type of expansion loss:
+                - 'soft_target': KL divergence to match EN activation distribution
+                - 'hard_target': BCE to activate specific EN tokens
+                - 'additive': Add EN activations to KO (union of tokens)
+            temperature: Temperature for softening distributions
+            top_k: Only expand to top-k EN tokens (None = all)
+        """
+        super().__init__()
+        self.expansion_type = expansion_type
+        self.temperature = temperature
+        self.top_k = top_k
+
+    def forward(
+        self,
+        korean_rep: torch.Tensor,
+        english_rep: torch.Tensor,
+        english_token_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute token expansion loss.
+
+        The goal: Make korean_rep activate the same tokens as english_rep.
+
+        Args:
+            korean_rep: Korean term sparse rep [batch_size, vocab_size]
+            english_rep: English synonym sparse rep [batch_size, vocab_size]
+            english_token_ids: Optional specific EN token IDs to activate
+
+        Returns:
+            Token expansion loss scalar
+        """
+        if self.expansion_type == "soft_target":
+            # Treat english_rep as soft target distribution
+            # Korean rep should match this distribution
+
+            # Normalize to get probability distributions
+            en_target = F.softmax(english_rep / self.temperature, dim=-1)
+            ko_log_pred = F.log_softmax(korean_rep / self.temperature, dim=-1)
+
+            # KL divergence: KO should predict EN's activation pattern
+            loss = F.kl_div(
+                ko_log_pred, en_target, reduction="batchmean"
+            ) * (self.temperature ** 2)
+
+        elif self.expansion_type == "hard_target":
+            # Binary cross-entropy: activate EN's activated tokens
+            en_activated = (english_rep > 0).float()
+
+            # Optional: only target top-k tokens
+            if self.top_k is not None:
+                _, top_indices = torch.topk(english_rep, self.top_k, dim=-1)
+                mask = torch.zeros_like(english_rep)
+                mask.scatter_(1, top_indices, 1.0)
+                en_activated = en_activated * mask
+
+            # Sigmoid on korean_rep for BCE
+            ko_sigmoid = torch.sigmoid(korean_rep)
+
+            # BCE loss: KO should activate where EN activates
+            loss = F.binary_cross_entropy(
+                ko_sigmoid, en_activated, reduction="mean"
+            )
+
+        elif self.expansion_type == "additive":
+            # Directly add EN activations to KO
+            # Loss = negative of EN token activations in KO output
+            # This encourages KO to have high values where EN has high values
+
+            # Get EN's top activations
+            if self.top_k is not None:
+                en_values, en_indices = torch.topk(english_rep, self.top_k, dim=-1)
+                # Gather KO values at EN's top positions
+                ko_at_en_positions = torch.gather(korean_rep, 1, en_indices)
+                # Loss: KO should have high values at EN's top positions
+                loss = -ko_at_en_positions.mean()
+            else:
+                # Weight KO by EN activations
+                weighted = korean_rep * english_rep
+                loss = -weighted.sum(dim=-1).mean()
+
+        elif self.expansion_type == "mse_expansion":
+            # MSE between KO and EN representations
+            # This directly aligns the activation patterns
+            loss = F.mse_loss(korean_rep, english_rep)
+
+        else:
+            raise ValueError(f"Unknown expansion_type: {self.expansion_type}")
+
+        return loss
+
+
 class FLOPSLoss(nn.Module):
     """
     FLOPS regularization loss for sparsity.
