@@ -184,21 +184,25 @@ class CrossLingualKDLoss(nn.Module):
     Uses a multilingual dense teacher model (e.g., mE5-large) to guide
     the sparse student model to learn cross-lingual alignment.
 
-    The teacher already encodes Korean and English synonyms to similar
-    embeddings. This loss transfers that knowledge to the sparse model.
+    Since student (sparse, vocab_size) and teacher (dense, hidden_size) have
+    different dimensions, we use relation-based KD:
+    - Teacher's KO-EN similarity should match Student's KO-EN similarity
+    - This transfers cross-lingual alignment without dimension matching
     """
 
     def __init__(
         self,
         temperature: float = 1.0,
-        loss_type: str = "kl",
+        loss_type: str = "relation",
     ):
         """
         Initialize cross-lingual KD loss.
 
         Args:
             temperature: Temperature for softening distributions
-            loss_type: Type of KD loss ('kl', 'mse', 'cosine')
+            loss_type: Type of KD loss:
+                - 'relation': Match KO-EN similarity (recommended, dimension-free)
+                - 'mse_relation': MSE on similarity matrices
         """
         super().__init__()
         self.temperature = temperature
@@ -206,45 +210,73 @@ class CrossLingualKDLoss(nn.Module):
 
     def forward(
         self,
-        student_rep: torch.Tensor,
-        teacher_rep: torch.Tensor,
-        normalize: bool = True,
+        student_ko: torch.Tensor,
+        student_en: torch.Tensor,
+        teacher_ko: torch.Tensor,
+        teacher_en: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute KD loss between student sparse and teacher dense representations.
+        Compute relation-based KD loss.
+
+        The key insight: Teacher maps KO and EN synonyms to similar vectors.
+        We want Student to do the same, without requiring dimension matching.
 
         Args:
-            student_rep: Student sparse representations [batch_size, vocab_size]
-            teacher_rep: Teacher dense representations [batch_size, hidden_size]
-            normalize: Whether to normalize representations
+            student_ko: Student Korean sparse rep [batch_size, vocab_size]
+            student_en: Student English sparse rep [batch_size, vocab_size]
+            teacher_ko: Teacher Korean dense rep [batch_size, hidden_size]
+            teacher_en: Teacher English dense rep [batch_size, hidden_size]
 
         Returns:
             KD loss scalar
         """
-        if normalize:
-            student_rep = F.normalize(student_rep, p=2, dim=-1)
-            teacher_rep = F.normalize(teacher_rep, p=2, dim=-1)
+        # Normalize all representations
+        student_ko = F.normalize(student_ko, p=2, dim=-1)
+        student_en = F.normalize(student_en, p=2, dim=-1)
+        teacher_ko = F.normalize(teacher_ko, p=2, dim=-1)
+        teacher_en = F.normalize(teacher_en, p=2, dim=-1)
 
-        if self.loss_type == "kl":
-            # Softmax with temperature
-            student_soft = F.log_softmax(student_rep / self.temperature, dim=-1)
-            teacher_soft = F.softmax(teacher_rep / self.temperature, dim=-1)
+        if self.loss_type == "relation":
+            # Compute KO-EN similarity for both student and teacher
+            # Teacher similarity: how similar are KO-EN in teacher space
+            teacher_sim = F.cosine_similarity(teacher_ko, teacher_en, dim=-1)
 
-            # KL divergence
+            # Student similarity: how similar are KO-EN in student space
+            student_sim = F.cosine_similarity(student_ko, student_en, dim=-1)
+
+            # Loss: Student's KO-EN similarity should match Teacher's
+            # Teacher already has high KO-EN similarity for synonyms
+            loss = F.mse_loss(student_sim, teacher_sim)
+
+        elif self.loss_type == "mse_relation":
+            # Full similarity matrix matching
+            # Teacher: [batch, batch] similarity matrix
+            teacher_sim_matrix = torch.mm(teacher_ko, teacher_en.t())
+
+            # Student: [batch, batch] similarity matrix
+            student_sim_matrix = torch.mm(student_ko, student_en.t())
+
+            # Scale by temperature
+            teacher_sim_matrix = teacher_sim_matrix / self.temperature
+            student_sim_matrix = student_sim_matrix / self.temperature
+
+            # MSE between similarity matrices
+            loss = F.mse_loss(student_sim_matrix, teacher_sim_matrix)
+
+        elif self.loss_type == "kl_relation":
+            # KL divergence on softmaxed similarity distributions
+            # Each row becomes a probability distribution over targets
+            teacher_sim_matrix = torch.mm(teacher_ko, teacher_en.t())
+            student_sim_matrix = torch.mm(student_ko, student_en.t())
+
+            teacher_probs = F.softmax(teacher_sim_matrix / self.temperature, dim=-1)
+            student_log_probs = F.log_softmax(
+                student_sim_matrix / self.temperature, dim=-1
+            )
+
             loss = F.kl_div(
-                student_soft,
-                teacher_soft,
-                reduction="batchmean",
-            ) * (self.temperature ** 2)
-
-        elif self.loss_type == "mse":
-            # Mean squared error (requires same dimensions)
-            loss = F.mse_loss(student_rep, teacher_rep)
-
-        elif self.loss_type == "cosine":
-            # Cosine similarity loss
-            similarity = F.cosine_similarity(student_rep, teacher_rep, dim=-1)
-            loss = (1.0 - similarity).mean()
+                student_log_probs, teacher_probs, reduction="batchmean"
+            ) * (self.temperature**2)
 
         else:
             raise ValueError(f"Unknown loss_type: {self.loss_type}")
