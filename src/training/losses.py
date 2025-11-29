@@ -526,6 +526,249 @@ class FLOPSLoss(nn.Module):
         return loss
 
 
+class FrequencyPenaltyLoss(nn.Module):
+    """
+    Frequency-based penalty loss for noise token suppression.
+
+    This loss penalizes tokens that are activated across ALL inputs in a batch,
+    which are likely noise tokens (e.g., 'function', 'operator', 'organization').
+
+    Key insight:
+    - Noise tokens: high mean activation, low variance (fire for everything)
+    - Meaningful tokens: selective activation, high variance (fire for relevant inputs)
+
+    The loss encourages discriminative token activation by penalizing
+    tokens with high mean but low variance.
+    """
+
+    def __init__(
+        self,
+        penalty_type: str = "mean_var_ratio",
+        lambda_freq: float = 0.1,
+        eps: float = 1e-8,
+        top_k_penalty: Optional[int] = None,
+    ):
+        """
+        Initialize frequency penalty loss.
+
+        Args:
+            penalty_type: Type of penalty calculation:
+                - 'mean_var_ratio': Penalize mean/variance ratio (recommended)
+                - 'mean_only': Penalize mean activation only
+                - 'low_variance': Penalize low variance tokens
+            lambda_freq: Weight for frequency penalty
+            eps: Small value to avoid division by zero
+            top_k_penalty: Only penalize top-k highest mean tokens (None = all)
+        """
+        super().__init__()
+        self.penalty_type = penalty_type
+        self.lambda_freq = lambda_freq
+        self.eps = eps
+        self.top_k_penalty = top_k_penalty
+
+    def forward(self, sparse_repr: torch.Tensor) -> torch.Tensor:
+        """
+        Compute frequency penalty loss.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Frequency penalty loss scalar
+        """
+        # Compute per-token statistics across batch
+        mean_activation = sparse_repr.mean(dim=0)  # [vocab_size]
+        var_activation = sparse_repr.var(dim=0)    # [vocab_size]
+
+        if self.penalty_type == "mean_var_ratio":
+            # Penalize high mean / low variance (noise pattern)
+            # High score = likely noise (high everywhere, no discrimination)
+            noise_score = mean_activation / (var_activation + self.eps)
+
+            if self.top_k_penalty is not None:
+                # Only penalize top-k highest noise scores
+                top_k_scores, _ = torch.topk(noise_score, self.top_k_penalty)
+                loss = self.lambda_freq * top_k_scores.mean()
+            else:
+                loss = self.lambda_freq * noise_score.mean()
+
+        elif self.penalty_type == "mean_only":
+            # Simple: penalize high average activation
+            if self.top_k_penalty is not None:
+                top_k_mean, _ = torch.topk(mean_activation, self.top_k_penalty)
+                loss = self.lambda_freq * top_k_mean.mean()
+            else:
+                loss = self.lambda_freq * mean_activation.mean()
+
+        elif self.penalty_type == "low_variance":
+            # Encourage high variance (discriminative tokens)
+            # Negative because we want to MAXIMIZE variance
+            loss = -self.lambda_freq * var_activation.mean()
+
+        else:
+            raise ValueError(f"Unknown penalty_type: {self.penalty_type}")
+
+        return loss
+
+    def get_noise_tokens(
+        self,
+        sparse_repr: torch.Tensor,
+        tokenizer,
+        top_k: int = 20,
+    ) -> list:
+        """
+        Identify likely noise tokens based on activation patterns.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+            tokenizer: Tokenizer for decoding token IDs
+            top_k: Number of top noise tokens to return
+
+        Returns:
+            List of (token, noise_score) tuples
+        """
+        with torch.no_grad():
+            mean_activation = sparse_repr.mean(dim=0)
+            var_activation = sparse_repr.var(dim=0)
+            noise_score = mean_activation / (var_activation + self.eps)
+
+            top_scores, top_indices = torch.topk(noise_score, top_k)
+            tokens = tokenizer.convert_ids_to_tokens(top_indices.cpu().tolist())
+
+            return list(zip(tokens, top_scores.cpu().tolist()))
+
+
+class ExplicitNoiseTokenLoss(nn.Module):
+    """
+    Explicit noise token penalty loss.
+
+    This loss directly penalizes activation of known noise tokens.
+    Unlike FrequencyPenaltyLoss which uses statistical patterns,
+    this approach explicitly specifies tokens to suppress.
+
+    Advantages:
+    - More precise control over which tokens to penalize
+    - No risk of suppressing useful common tokens
+    - Interpretable and predictable behavior
+    """
+
+    # Default noise tokens commonly appearing in Top-K
+    DEFAULT_NOISE_TOKENS = [
+        # Programming/technical terms (not domain-relevant)
+        "function", "operator", "operation", "operations",
+        "programming", "integration", "organization",
+        "implementation", "configuration", "application",
+        # Generic terms
+        "system", "systems", "process", "processing",
+        "method", "methods", "type", "types",
+        # Subword noise
+        "##ing", "##tion", "##ation", "##ment",
+        # Common but uninformative
+        "the", "and", "for", "with", "from",
+    ]
+
+    def __init__(
+        self,
+        tokenizer,
+        noise_tokens: Optional[list[str]] = None,
+        lambda_noise: float = 0.1,
+        penalty_type: str = "sum",
+    ):
+        """
+        Initialize explicit noise token loss.
+
+        Args:
+            tokenizer: Tokenizer for converting tokens to IDs
+            noise_tokens: List of noise tokens to penalize.
+                         Uses DEFAULT_NOISE_TOKENS if None.
+            lambda_noise: Weight for noise penalty
+            penalty_type: Type of penalty calculation:
+                - 'sum': Sum of activations for noise tokens
+                - 'max': Maximum activation among noise tokens
+                - 'softmax': Softmax-weighted penalty (focuses on high activations)
+        """
+        super().__init__()
+        self.lambda_noise = lambda_noise
+        self.penalty_type = penalty_type
+
+        # Get noise token IDs
+        tokens_to_use = noise_tokens or self.DEFAULT_NOISE_TOKENS
+        self.noise_token_ids = []
+        self.noise_tokens_found = []
+
+        for token in tokens_to_use:
+            # Try exact match first
+            token_id = tokenizer.convert_tokens_to_ids(token)
+            if token_id != tokenizer.unk_token_id:
+                self.noise_token_ids.append(token_id)
+                self.noise_tokens_found.append(token)
+
+        # Convert to tensor for efficient indexing
+        self.register_buffer(
+            "noise_indices",
+            torch.tensor(self.noise_token_ids, dtype=torch.long)
+        )
+
+        print(f"ExplicitNoiseTokenLoss initialized with {len(self.noise_token_ids)} "
+              f"noise tokens: {self.noise_tokens_found[:10]}...")
+
+    def forward(self, sparse_repr: torch.Tensor) -> torch.Tensor:
+        """
+        Compute explicit noise token penalty.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Noise penalty loss scalar
+        """
+        if len(self.noise_token_ids) == 0:
+            return torch.tensor(0.0, device=sparse_repr.device)
+
+        # Extract activations for noise tokens: [batch_size, num_noise_tokens]
+        noise_activations = sparse_repr[:, self.noise_indices]
+
+        if self.penalty_type == "sum":
+            # Sum of all noise token activations
+            loss = noise_activations.sum(dim=-1).mean()
+
+        elif self.penalty_type == "max":
+            # Maximum noise token activation per sample
+            loss = noise_activations.max(dim=-1).values.mean()
+
+        elif self.penalty_type == "softmax":
+            # Softmax-weighted penalty (focuses on high activations)
+            weights = F.softmax(noise_activations, dim=-1)
+            loss = (weights * noise_activations).sum(dim=-1).mean()
+
+        else:
+            raise ValueError(f"Unknown penalty_type: {self.penalty_type}")
+
+        return self.lambda_noise * loss
+
+    def get_noise_activations(
+        self,
+        sparse_repr: torch.Tensor,
+    ) -> dict[str, float]:
+        """
+        Get activation statistics for noise tokens.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Dictionary mapping noise tokens to their mean activation
+        """
+        with torch.no_grad():
+            noise_activations = sparse_repr[:, self.noise_indices]
+            mean_activations = noise_activations.mean(dim=0)
+
+            return {
+                token: mean_activations[i].item()
+                for i, token in enumerate(self.noise_tokens_found)
+            }
+
+
 class CombinedLoss(nn.Module):
     """
     Combined loss function for Neural Sparse training.

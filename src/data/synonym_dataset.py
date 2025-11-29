@@ -52,17 +52,30 @@ class SynonymDataset(Dataset):
 
     def _validate_entry(self, entry: Dict) -> bool:
         """Validate entry has required fields."""
+        # Format 1: ko_term + en_terms (list)
         if "ko_term" in entry and "en_terms" in entry:
             return bool(entry["ko_term"] and entry["en_terms"])
+        # Format 2: ko_term + en_term (single) - large-scale dataset format
+        if "ko_term" in entry and "en_term" in entry:
+            return bool(entry["ko_term"] and entry["en_term"])
+        # Format 3: ko + en_primary (generation format)
         if "ko" in entry and "en_primary" in entry:
             return bool(entry["ko"] and entry["en_primary"])
         return False
 
     def _normalize_entry(self, entry: Dict) -> Dict:
         """Normalize entry to standard format."""
-        if "ko_term" in entry:
+        # Format 1: Already has ko_term + en_terms (list)
+        if "ko_term" in entry and "en_terms" in entry:
             return entry
-        # Convert from generation format
+        # Format 2: ko_term + en_term (single) - large-scale dataset format
+        if "ko_term" in entry and "en_term" in entry:
+            return {
+                "ko_term": entry["ko_term"],
+                "en_terms": [entry["en_term"]],
+                "category": entry.get("source", "unknown"),
+            }
+        # Format 3: Convert from generation format (ko + en_primary)
         en_terms = [entry["en_primary"]]
         if entry.get("en_alternatives"):
             en_terms.extend(entry["en_alternatives"])
