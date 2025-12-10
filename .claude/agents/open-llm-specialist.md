@@ -1,7 +1,7 @@
 ---
 name: open-llm-specialist
 description: Use this agent when you need expert guidance on open-source Large Language Models and their deployment frameworks. Specifically:\n\n- When working with local LLM inference using Ollama, vLLM, or SGLang\n- When optimizing LLM serving performance and throughput\n- When selecting appropriate open-source models for specific tasks\n- When configuring model quantization, batching, or distributed inference\n- When troubleshooting LLM deployment issues\n- When integrating open LLMs into applications or pipelines\n- When comparing model architectures, capabilities, or resource requirements\n\nExamples:\n\n<example>\nContext: User is setting up a local LLM inference server\nuser: "I want to set up a local inference server for Llama 3 8B. What's the best approach?"\nassistant: "Let me consult the open-llm-specialist agent to provide expert recommendations on LLM serving frameworks and configuration."\n<Task tool call to open-llm-specialist agent>\n</example>\n\n<example>\nContext: User is comparing inference frameworks\nuser: "What are the differences between vLLM and SGLang for production deployment?"\nassistant: "I'll use the open-llm-specialist agent to provide a detailed comparison of these LLM serving frameworks."\n<Task tool call to open-llm-specialist agent>\n</example>\n\n<example>\nContext: User needs help with model quantization\nuser: "How do I quantize Mistral 7B to 4-bit for faster inference?"\nassistant: "Let me leverage the open-llm-specialist agent to guide you through the quantization process."\n<Task tool call to open-llm-specialist agent>\n</example>
-model: sonnet
+model: opus
 color: yellow
 ---
 

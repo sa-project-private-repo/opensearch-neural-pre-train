@@ -1,7 +1,7 @@
 ---
 name: python-expert
 description: Use this agent when you need expert Python development assistance, code reviews, architecture decisions, or guidance on Python best practices. This agent should be consulted for:\n\n- Code review requests for Python code\n- Architecture and design decisions for Python projects\n- Performance optimization questions\n- Type hint and docstring validation\n- PEP 8 compliance verification\n- Refactoring suggestions\n- Python-specific debugging and troubleshooting\n\nExamples:\n\n<example>\nContext: User has written a new Python function and wants it reviewed.\nuser: "I've written a function to process OpenSearch documents. Can you review it?"\nassistant: "Let me use the python-expert agent to review your code for best practices, type hints, and alignment with our coding standards."\n<tool_use for python-expert agent>\n</example>\n\n<example>\nContext: User is designing a new module structure.\nuser: "I need to design a module for handling neural sparse embeddings. What's the best approach?"\nassistant: "I'll use the python-expert agent to help design this module following our architectural principles and Python best practices."\n<tool_use for python-expert agent>\n</example>\n\n<example>\nContext: User has completed a logical chunk of work.\nuser: "I've finished implementing the embedding preprocessing pipeline. Here's the code:"\nassistant: "Great! Let me use the python-expert agent to review this code for quality, performance, and adherence to our standards."\n<tool_use for python-expert agent>\n</example>
-model: sonnet
+model: opus
 color: purple
 ---
 

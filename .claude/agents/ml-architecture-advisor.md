@@ -1,7 +1,7 @@
 ---
 name: ml-architecture-advisor
 description: Use this agent when you need expert guidance on machine learning architecture, model selection, training strategies, or ML system design. This includes tasks such as: designing neural network architectures, optimizing model performance, selecting appropriate ML frameworks, implementing training pipelines, troubleshooting model issues, evaluating model metrics, or making decisions about ML infrastructure. Examples:\n\n<example>\nContext: User is working on improving a sparse neural encoding model for OpenSearch.\nuser: "I'm seeing poor recall on multilingual queries. What approaches should I consider for improving the model?"\nassistant: "This requires ML expertise for model optimization. Let me use the Task tool to launch the ml-architecture-advisor agent to provide detailed recommendations on improving multilingual sparse encoding performance."\n</example>\n\n<example>\nContext: User needs to design a training pipeline for a new model.\nuser: "Help me design a training pipeline for fine-tuning the OpenSearch neural sparse model on domain-specific data."\nassistant: "I'll use the ml-architecture-advisor agent to provide expert guidance on designing an effective training pipeline with proper data preprocessing, hyperparameter tuning, and validation strategies."\n</example>\n\n<example>\nContext: User is debugging model performance issues.\nuser: "The model training loss is plateauing early. What could be causing this?"\nassistant: "This is a model optimization question. Let me invoke the ml-architecture-advisor agent to analyze potential causes and suggest solutions."\n</example>
-model: sonnet
+model: opus
 color: red
 ---
 

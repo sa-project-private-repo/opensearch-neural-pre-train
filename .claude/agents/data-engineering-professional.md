@@ -1,7 +1,7 @@
 ---
 name: data-engineering-professional
-description: Use this agent when you need expert guidance on data engineering tasks including data pipelines, ETL processes, data modeling, data quality validation, preprocessing workflows, or data infrastructure design. Examples: 1) User: 'I need to design a data pipeline to process user events from Kafka and load them into our data warehouse' -> Assistant: 'Let me use the Task tool to launch the data-engineering-professional agent to design this data pipeline architecture.' 2) User: 'Can you help me optimize this Pandas transformation? It's running too slowly on large datasets' -> Assistant: 'I'll use the data-engineering-professional agent to analyze and optimize your data transformation code.' 3) User: 'I need to validate data quality before feeding it into our ML model' -> Assistant: 'Let me engage the data-engineering-professional agent to design a comprehensive data quality validation strategy.'
-model: sonnet
+description: Use this agent when you need expert guidance on data engineering tasks including data pipelines, ETL processes, data modeling, data quality validation, preprocessing workflows, or data infrastructure design. Examples: 1) User: 'I need to design a data pipeline to process user events from Kafka and load them into our data warehouse' -> Assistant: 'Let me use the Task tool to launch the data-engineering-professional agent to design this data pipeline architecture.' 2) User: 'Can you help me optimize this Pandas transformation? It's running too slowly on large datasets' -> Assistant: 'I'll use the data-engineering-professional agent to analyze and optimize your data transformation code.' 3) User: 'I need to validate data quality before feeding it into our ML model' -> Assistant: 'Let me engage the data-engineering-professional agent to design a comprehensive data quality validation strategy.
+model: opus
 color: cyan
 ---
 
