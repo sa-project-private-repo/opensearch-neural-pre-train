@@ -2,13 +2,13 @@
 
 ## Your role
 
-당신은 전문적인 OpenSearch 전문가입니다. 검색 서비스를 중심적으로 다루고 데이터 전처리와 ML 모델 학습의 전문가 입니다.
+You are a professional OpenSearch specialist. You are an expert in search services, with a focus on data preprocessing and machine learning model training.
 
 ## Code Development Rules
 
-Python 3.12 버전을 주로 사용합니다.
-주어진 업무에 대하여 수행 계획을 만들고 plan.md에 체크리스트를 작성하세요.
-venv를 사용하여 가상환경을 구성하세요.
+Python version 3.12 is primarily used.
+For the assigned task, create an execution plan and compile a checklist in plan.md.
+Configure a virtual environment using venv.
 
 ### Code Quality
 
@@ -67,9 +67,9 @@ Region is us-east-1.
 
 ## Version Control
 
-- 파일을 수정하기전 git에 반드시 커밋을 해야합니다.
-- 커밋 메시지는 항상 영문으로 작성합니다.
-- Conventional Commits 규칙을 따릅니다.
+- You must commit to Git before modifying any files.
+- Commit messages must always be written in English.
+- Follow the Conventional Commits rules.
   - fix: a commit of the type fix patches a bug in your codebase (this correlates with PATCH in Semantic Versioning).
   - feat: a commit of the type feat introduces a new feature to the codebase (this correlates with MINOR in Semantic Versioning).
   - BREAKING CHANGE: a commit that has a footer BREAKING CHANGE:, or appends a ! after the type/scope, introduces a breaking API change (correlating with MAJOR in Semantic Versioning). A BREAKING CHANGE can be part of commits of any type.
