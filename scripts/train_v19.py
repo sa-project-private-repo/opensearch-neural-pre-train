@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-v16 Training Script: Large Model + Large Dataset
+v19 Training Script: XLM-RoBERTa-large with High-Quality Data Only
 
-Key features:
-1. XLM-RoBERTa-large (550M params) - 5x larger than bert-base-multilingual
-2. 1.5M+ training pairs from v16 dataset
-3. Mixed precision training (FP16) for memory efficiency
-4. Gradient accumulation for effective larger batch sizes
+Based on v17/v18 learnings:
+- Use only high-quality MUSE data (exclude wikidata noise)
+- Same conservative hyperparameters as v17 (proven to work)
+- Dataset: 18K pairs (quality over quantity)
 """
 
 import sys
@@ -21,43 +20,43 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
 from src.model.splade_model import create_splade_model
 
 
-# Configuration
+# Configuration - based on v17 success
 CONFIG = {
-    # Model - using XLM-RoBERTa-large for better multilingual representation
+    # Model
     "model_name": "xlm-roberta-large",
     "max_length": 64,
 
-    # Data
-    "data_path": PROJECT_ROOT / "dataset" / "v16_large" / "term_pairs.jsonl",
+    # Data - high-quality only (no wikidata)
+    "data_path": PROJECT_ROOT / "dataset" / "v19_high_quality" / "term_pairs.jsonl",
 
-    # Training - adjusted for larger model
-    "batch_size": 32,  # Reduced due to larger model
-    "gradient_accumulation_steps": 4,  # Effective batch size: 32 * 4 = 128
-    "num_epochs": 5,  # Fewer epochs due to more data
-    "learning_rate": 1e-5,  # Lower LR for larger model
-    "warmup_ratio": 0.1,
+    # Training - same as v17
+    "batch_size": 32,
+    "gradient_accumulation_steps": 4,
+    "num_epochs": 10,  # Same as v17
+    "learning_rate": 2e-6,
+    "warmup_ratio": 0.2,
     "max_grad_norm": 1.0,
 
-    # Loss weights
-    "lambda_self": 1.0,
+    # Loss weights - same as v17
+    "lambda_self": 2.0,
     "lambda_target": 5.0,
     "lambda_margin": 3.0,
     "lambda_negative": 0.5,
-    "lambda_sparsity": 0.01,
+    "lambda_sparsity": 0.005,
     "target_margin": 2.0,
 
     # Mixed precision
     "use_fp16": True,
 
     # Output
-    "output_dir": PROJECT_ROOT / "outputs" / "v16_xlm_large",
+    "output_dir": PROJECT_ROOT / "outputs" / "v19_xlm_large",
 }
 
 
@@ -76,8 +75,7 @@ def is_english_char(c: str) -> bool:
 
 
 def is_non_target_token(token: str) -> bool:
-    """Check if token is from non-target language (not Korean or English)."""
-    # Handle RoBERTa tokenizer special characters
+    """Check if token is from non-target language."""
     clean = token.replace("▁", "").replace("##", "")
     if not clean:
         return False
@@ -88,7 +86,6 @@ def is_non_target_token(token: str) -> bool:
     if has_korean or has_english:
         return False
 
-    # Check for other languages
     has_japanese = any(
         "\u3040" <= c <= "\u309f" or "\u30a0" <= c <= "\u30ff" for c in clean
     )
@@ -117,20 +114,18 @@ class TermPairDataset(Dataset):
             for line in tqdm(f, desc="Loading data"):
                 item = json.loads(line.strip())
 
-                ko_term = item.get("ko_text") or item.get("ko_term", "")
-                en_term = item.get("en_text") or item.get("en_term", "")
+                ko_term = item.get("ko", "")
+                en_term = item.get("en", "")
 
                 if not ko_term or not en_term:
                     continue
 
-                # Tokenize Korean term
                 ko_tokens = tokenizer.tokenize(ko_term)
                 ko_token_ids = tokenizer.convert_tokens_to_ids(ko_tokens)
                 ko_token_ids = [
                     tid for tid in ko_token_ids if tid != tokenizer.unk_token_id
                 ]
 
-                # Tokenize English term
                 en_tokens = tokenizer.tokenize(en_term.lower())
                 en_token_ids = tokenizer.convert_tokens_to_ids(en_tokens)
                 en_token_ids = [
@@ -172,7 +167,7 @@ class TermPairDataset(Dataset):
 
 
 def collate_fn(batch):
-    """Custom collate function for variable-length token ID lists."""
+    """Custom collate function."""
     return {
         "input_ids": torch.stack([item["input_ids"] for item in batch]),
         "attention_mask": torch.stack([item["attention_mask"] for item in batch]),
@@ -203,13 +198,11 @@ class TermLevelLoss(nn.Module):
         for i in range(batch_size):
             rep = sparse_rep[i]
 
-            # Self-preservation loss: Korean tokens should be activated
             if ko_token_ids[i]:
                 ko_ids = torch.tensor(ko_token_ids[i], device=device)
                 ko_activations = rep[ko_ids]
                 self_loss = self_loss - torch.log(ko_activations + 1e-8).mean()
 
-            # Target translation loss: English tokens should be activated
             if en_token_ids[i]:
                 en_ids = torch.tensor(en_token_ids[i], device=device)
                 en_activations = rep[en_ids]
@@ -218,7 +211,6 @@ class TermLevelLoss(nn.Module):
                     self.target_margin - en_activations
                 ).mean()
 
-            # Negative loss: Non-target language tokens should not be activated
             if self.non_target_ids is not None:
                 non_target_ids_device = self.non_target_ids.to(device)
                 non_target_activations = rep[non_target_ids_device]
@@ -242,7 +234,6 @@ class TermLevelLoss(nn.Module):
         }
 
 
-# Test pairs for evaluation
 TEST_PAIRS = [
     ("머신러닝", ["machine", "learning"], ["머신", "러닝"]),
     ("딥러닝", ["deep", "learning"], ["딥", "러닝"]),
@@ -281,8 +272,7 @@ def evaluate_model(model, tokenizer, device, top_k=50):
                 return_tensors="pt",
             )
 
-            # Use autocast for evaluation too
-            with autocast(enabled=CONFIG["use_fp16"]):
+            with autocast("cuda", enabled=CONFIG["use_fp16"]):
                 sparse_rep, _ = model(
                     encoding["input_ids"].to(device),
                     encoding["attention_mask"].to(device),
@@ -293,7 +283,6 @@ def evaluate_model(model, tokenizer, device, top_k=50):
             top_tokens = tokenizer.convert_ids_to_tokens(top_indices)
             top_tokens_set = set(top_tokens)
 
-            # Check Korean preservation
             for ko in ko_expected:
                 ko_toks = tokenizer.tokenize(ko)
                 for tok in ko_toks:
@@ -301,7 +290,6 @@ def evaluate_model(model, tokenizer, device, top_k=50):
                     if tok in top_tokens_set:
                         ko_activated_total += 1
 
-            # Check English activation
             for en in en_expected:
                 en_toks = tokenizer.tokenize(en.lower())
                 for tok in en_toks:
@@ -323,23 +311,24 @@ def evaluate_model(model, tokenizer, device, top_k=50):
 
 def main():
     print("=" * 70)
-    print("v16 TRAINING: XLM-RoBERTa-large + Large Dataset")
+    print("v19 TRAINING: XLM-RoBERTa-large with High-Quality Data")
     print("=" * 70)
+    print("\nKey features:")
+    print(f"  - Dataset: v19_high_quality (~18K pairs, MUSE only, no wikidata)")
+    print(f"  - Learning rate: {CONFIG['learning_rate']} (same as v17)")
+    print(f"  - Epochs: {CONFIG['num_epochs']} (same as v17)")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    print(f"\nDevice: {device}")
 
-    # Check GPU memory
     if torch.cuda.is_available():
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"GPU Memory: {gpu_mem:.1f} GB")
 
-    # Load tokenizer
     print(f"\nLoading tokenizer: {CONFIG['model_name']}...")
     tokenizer = AutoTokenizer.from_pretrained(CONFIG["model_name"])
     print(f"Vocab size: {tokenizer.vocab_size:,}")
 
-    # Build non-target token IDs
     print("\nBuilding non-target language token ID list...")
     non_target_ids = []
     for token_id in tqdm(range(tokenizer.vocab_size)):
@@ -349,7 +338,6 @@ def main():
     non_target_ids_tensor = torch.tensor(non_target_ids, dtype=torch.long)
     print(f"Found {len(non_target_ids):,} non-target language tokens")
 
-    # Load dataset
     dataset = TermPairDataset(CONFIG["data_path"], tokenizer, CONFIG["max_length"])
 
     dataloader = DataLoader(
@@ -367,7 +355,6 @@ def main():
         f"Effective batch size: {CONFIG['batch_size'] * CONFIG['gradient_accumulation_steps']}"
     )
 
-    # Create model
     print(f"\nCreating model: {CONFIG['model_name']}...")
     model = create_splade_model(
         model_name=CONFIG["model_name"],
@@ -380,17 +367,14 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {n_params:,} ({n_params / 1e6:.1f}M)")
 
-    # Loss function
     loss_fn = TermLevelLoss(
         target_margin=CONFIG["target_margin"], non_target_ids=non_target_ids_tensor
     )
 
-    # Optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=CONFIG["learning_rate"], weight_decay=0.01
     )
 
-    # Scheduler
     total_steps = (
         len(dataloader) * CONFIG["num_epochs"] // CONFIG["gradient_accumulation_steps"]
     )
@@ -403,19 +387,15 @@ def main():
     print(f"\nTotal optimization steps: {total_steps:,}")
     print(f"Warmup steps: {warmup_steps:,}")
 
-    # Mixed precision scaler
-    scaler = GradScaler(enabled=CONFIG["use_fp16"])
+    scaler = GradScaler("cuda", enabled=CONFIG["use_fp16"])
 
-    # Create output directory
     CONFIG["output_dir"].mkdir(parents=True, exist_ok=True)
 
-    # Initial evaluation
     ko_rate, en_rate = evaluate_model(model, tokenizer, device)
     print(f"\nInitial - KO: {ko_rate:.1f}%, EN: {en_rate:.1f}%")
 
-    # Training
     history = []
-    best_en_rate = 0
+    best_score = 0
     global_step = 0
 
     print("\n" + "=" * 70)
@@ -435,8 +415,7 @@ def main():
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
 
-            # Forward pass with mixed precision
-            with autocast(enabled=CONFIG["use_fp16"]):
+            with autocast("cuda", enabled=CONFIG["use_fp16"]):
                 sparse_rep, _ = model(input_ids, attention_mask)
 
                 losses = loss_fn(
@@ -455,10 +434,8 @@ def main():
                     + CONFIG["lambda_sparsity"] * sparsity_loss
                 )
 
-                # Scale loss for gradient accumulation
                 total_loss = total_loss / CONFIG["gradient_accumulation_steps"]
 
-            # Backward pass with scaled gradients
             scaler.scale(total_loss).backward()
 
             epoch_losses["total"] += total_loss.item() * CONFIG["gradient_accumulation_steps"]
@@ -467,7 +444,6 @@ def main():
             epoch_losses["margin"] += losses["margin"].item()
             epoch_losses["negative"] += losses["negative"].item()
 
-            # Optimizer step every gradient_accumulation_steps
             if (batch_idx + 1) % CONFIG["gradient_accumulation_steps"] == 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
@@ -479,7 +455,7 @@ def main():
                 optimizer.zero_grad()
                 global_step += 1
 
-            if (batch_idx + 1) % 500 == 0:
+            if (batch_idx + 1) % 100 == 0:
                 progress_bar.set_postfix(
                     {
                         "loss": f"{epoch_losses['total'] / (batch_idx + 1):.4f}",
@@ -488,15 +464,14 @@ def main():
                     }
                 )
 
-        # Average losses
         n_batches = len(dataloader)
         for key in epoch_losses:
             epoch_losses[key] /= n_batches
 
         history.append(dict(epoch_losses))
 
-        # Evaluate
         ko_rate, en_rate = evaluate_model(model, tokenizer, device)
+        combined_score = ko_rate + en_rate
 
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Total Loss: {epoch_losses['total']:.4f}")
@@ -504,8 +479,8 @@ def main():
         print(f"  Target Loss: {epoch_losses['target']:.4f}")
         print(f"  Korean Preservation: {ko_rate:.1f}%")
         print(f"  English Activation: {en_rate:.1f}%")
+        print(f"  Combined Score: {combined_score:.1f}")
 
-        # Save checkpoint
         checkpoint_path = CONFIG["output_dir"] / f"checkpoint_epoch{epoch + 1}.pt"
         torch.save(
             {
@@ -523,9 +498,8 @@ def main():
         )
         print(f"  Saved: {checkpoint_path}")
 
-        # Save best model
-        if en_rate > best_en_rate:
-            best_en_rate = en_rate
+        if combined_score > best_score:
+            best_score = combined_score
             best_path = CONFIG["output_dir"] / "best_model.pt"
             torch.save(
                 {
@@ -533,6 +507,7 @@ def main():
                     "model_state_dict": model.state_dict(),
                     "ko_rate": ko_rate,
                     "en_rate": en_rate,
+                    "combined_score": combined_score,
                     "config": {
                         k: str(v) if isinstance(v, Path) else v
                         for k, v in CONFIG.items()
@@ -540,9 +515,8 @@ def main():
                 },
                 best_path,
             )
-            print(f"  ★ New best model! EN rate: {en_rate:.1f}%")
+            print(f"  ★ New best model! Score: {combined_score:.1f} (KO:{ko_rate:.1f}% + EN:{en_rate:.1f}%)")
 
-    # Save final model
     final_path = CONFIG["output_dir"] / "final_model.pt"
     torch.save(
         {
@@ -559,9 +533,8 @@ def main():
     print("TRAINING COMPLETE")
     print(f"{'=' * 70}")
     print(f"Final model saved: {final_path}")
-    print(f"Best EN rate: {best_en_rate:.1f}%")
+    print(f"Best combined score: {best_score:.1f}")
 
-    # Save history
     with open(CONFIG["output_dir"] / "training_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
