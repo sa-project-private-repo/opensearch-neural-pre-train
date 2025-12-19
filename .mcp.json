@@ -1,0 +1,76 @@
+{
+    "mcpServers": {
+      "context7": {
+        "command": "npx",
+        "args": ["-y", "@upstash/context7-mcp@latest"]
+      },
+      "awslabs.terraform-mcp-server": {
+        "command": "uvx",
+        "args": ["awslabs.terraform-mcp-server@latest"],
+        "env": {
+          "FASTMCP_LOG_LEVEL": "ERROR"
+        },
+        "disabled": false,
+        "autoApprove": []
+      },
+      "awslabs.aws-api-mcp-server": {
+        "command": "uvx",
+        "args": [
+          "awslabs.aws-api-mcp-server@latest"
+        ],
+        "env": {
+          "AWS_REGION": "us-east-1"
+        },
+        "disabled": false,
+        "autoApprove": []
+      },
+      "awslabs.cdk-mcp-server": {
+        "command": "uvx",
+        "args": ["awslabs.cdk-mcp-server@latest"],
+        "env": {
+          "FASTMCP_LOG_LEVEL": "ERROR"
+        },
+        "disabled": false,
+        "autoApprove": []
+      },
+      "strands-agents": {
+        "command": "uvx",
+        "args": ["strands-agents-mcp-server"],
+        "env": {
+          "FASTMCP_LOG_LEVEL": "INFO"
+        },
+        "disabled": false,
+        "autoApprove": ["search_docs", "fetch_doc"]
+      },
+      "awslabs.aws-documentation-mcp-server": {
+        "command": "uvx",
+        "args": ["awslabs.aws-documentation-mcp-server@latest"],
+        "env": {
+          "FASTMCP_LOG_LEVEL": "ERROR",
+          "AWS_DOCUMENTATION_PARTITION": "aws",
+          "MCP_USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        },
+        "disabled": false,
+        "autoApprove": []
+      },
+      "bedrock-agentcore-mcp-server": {
+        "command": "uvx",
+        "args": ["awslabs.amazon-bedrock-agentcore-mcp-server@latest"],
+        "env": {
+          "FASTMCP_LOG_LEVEL": "ERROR"
+        },
+        "disabled": false,
+        "autoApprove": []
+      },
+      "playwright": {
+        "command": "npx",
+        "args": [
+          "@playwright/mcp@latest"
+        ]
+      },
+      "chrome-devtools": {
+        "command": "npx",
+        "args": ["-y", "chrome-devtools-mcp@latest"]
+      }
+    }
+  }
