@@ -6,6 +6,8 @@
 *.bin
 *.log
 *.pyc
+*.safetensors
+huggingface/*.safetensors
 
 __pycache__
 
