@@ -1,10 +1,231 @@
-# OpenSearch Korean-English Neural Sparse Model
+# OpenSearch Korean Neural Sparse Model
 
-Cross-lingual neural sparse retrieval model for OpenSearch.
+Neural sparse retrieval model for Korean text in OpenSearch.
 
 ## Overview
 
-This repository contains training code for a Korean-English cross-lingual SPLADE-doc model. The model enables neural sparse search with lexical expansion across Korean and English terms.
+This repository contains training code for Korean SPLADE-doc models. The models enable neural sparse search with synonym expansion for Korean terms.
+
+### Model Versions
+
+| Version | Description | Key Features |
+|---------|-------------|--------------|
+| v19 | Cross-lingual (KO-EN) | XLM-RoBERTa, bilingual dictionary |
+| v21.2 | Korean synonym expansion | Legal/Medical domain, A.X-Encoder |
+| **v21.3** | **Enhanced Korean model** | **Noise filtering, balanced hard negatives, ranking metrics** |
+
+---
+
+## v21.3 Korean Neural Sparse Encoder (Latest)
+
+v21.3는 데이터 품질과 평가 지표를 알고리즘적/통계적 방법으로 개선한 한국어 Neural Sparse 모델입니다.
+
+### v21.2 대비 개선사항
+
+| 항목 | v21.2 | v21.3 |
+|------|-------|-------|
+| 데이터 노이즈 | ~50% (BPE 노이즈) | **< 10%** (3단계 필터링) |
+| 평가 지표 | 100% 포화 (Binary) | **Recall@K, MRR** (비포화) |
+| 의료 데이터 | 로드 실패 | **4개 config 정상 로드** |
+| Hard Negative | Random 샘플링 | **난이도별 균형 샘플링** |
+
+### 데이터 전처리 파이프라인
+
+#### 1. 데이터 수집 (`00_data_ingestion.ipynb`)
+
+14개 한국어 데이터셋에서 텍스트 수집:
+
+| 도메인 | 데이터셋 | 설명 |
+|--------|----------|------|
+| 백과사전 | Wikipedia (ko) | 일반 지식 |
+| QA | KLUE-MRC, KorQuAD | 질의응답 컨텍스트 |
+| 법률 | Korean Law Precedents | 판례, 법률 용어 |
+| **의료** | **KorMedMCQA (4 configs)** | 의사/간호사/약사/치과 자격시험 |
+| 대화 | NSMC, KorHate | 리뷰, 댓글 |
+
+**의료 데이터 로드 (v21.2 버그 수정):**
+```python
+# v21.2: 실패 (config 미지정)
+load_dataset("sean0042/KorMedMCQA", split="train")  # Error
+
+# v21.3: 성공 (config 명시)
+medical_configs = ["dentist", "doctor", "nurse", "pharm"]
+for config in medical_configs:
+    load_dataset("sean0042/KorMedMCQA", config, split="train")
+```
+
+#### 2. 노이즈 필터링 (`01_noise_filtering.ipynb`)
+
+3가지 알고리즘적 필터링을 앙상블로 적용:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Raw Synonym Pairs                         │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+         ┌────────────┼────────────┐
+         ▼            ▼            ▼
+    ┌─────────┐  ┌─────────┐  ┌─────────┐
+    │   IG    │  │   PMI   │  │   CE    │
+    │ Filter  │  │ Filter  │  │ Filter  │
+    └────┬────┘  └────┬────┘  └────┬────┘
+         │            │            │
+         └────────────┼────────────┘
+                      ▼
+              ┌───────────────┐
+              │ Majority Vote │
+              │   (2/3 통과)   │
+              └───────┬───────┘
+                      ▼
+              Filtered Pairs
+```
+
+**필터링 방법:**
+
+| 필터 | 알고리즘 | 목적 | Threshold |
+|------|----------|------|-----------|
+| **IG** | KNN Entropy (Kozachenko-Leonenko) | Truncation/Case 변경 제거 | Bottom 10% |
+| **PMI** | 동시출현 확률 (Laplace smoothing) | False positive 제거 | Bottom 10% |
+| **CE** | Cross-Encoder (bge-reranker-v2-m3) | 의미적 비유사 쌍 제거 | Bottom 10% |
+
+**Information Gain 계산:**
+```python
+IG(source → target) = H(target) - H(target|source)
+
+# H(target): 전체 코퍼스에서 target의 entropy
+# H(target|source): source 이웃 내에서 target의 conditional entropy
+# 높은 IG = 의미적 확장이 유의미 (유지)
+# 낮은 IG = 단순 truncation (제거)
+```
+
+**PMI 계산:**
+```python
+PMI(x, y) = log(P(x,y) / (P(x) * P(y)))
+
+# 높은 PMI = 동시 출현 빈도 높음 (진짜 동의어)
+# 낮은 PMI = 독립적 출현 (임베딩 유사도만 높은 false positive)
+```
+
+**앙상블 결정:**
+- 3개 필터 중 **2개 이상 통과**해야 유지 (다수결 투표)
+- 하드코딩 threshold 없이 **percentile 기반** 자동 결정
+
+#### 3. 데이터 준비 (`02_data_preparation.ipynb`)
+
+**난이도별 Hard Negative Mining:**
+
+| 난이도 | 유사도 범위 | 비율 | 특징 |
+|--------|-------------|------|------|
+| Easy | 0.3 - 0.5 | 33% | 쉽게 구분 가능 |
+| Medium | 0.5 - 0.7 | 33% | 중간 난이도 |
+| Hard | 0.7 - 0.9 | 33% | 어려운 negative |
+
+```python
+# Triplet 형식: (anchor, positive, negative)
+{
+    "anchor": "인공지능",
+    "positive": "AI",           # 동의어
+    "negative": "자동화",       # Hard negative (유사하지만 다름)
+    "difficulty": "hard"
+}
+```
+
+### 학습 (`03_training.ipynb`)
+
+**모델 구조:**
+```
+Input → A.X-Encoder-base → log(1 + ReLU(logits)) → Max Pooling → Sparse Vector
+```
+
+**손실 함수:**
+```python
+L_total = λ_self * L_self           # Self-reconstruction
+        + λ_synonym * L_positive    # Synonym activation
+        + λ_margin * L_triplet      # Triplet margin loss
+        + λ_flops * L_flops         # Sparsity regularization
+```
+
+**Hyperparameters (v21.3):**
+```yaml
+model_name: skt/A.X-Encoder-base
+batch_size: 64
+num_epochs: 25
+learning_rate: 3e-6
+lambda_self: 4.0
+lambda_synonym: 10.0
+lambda_margin: 2.5
+lambda_flops: 8e-3
+target_margin: 1.5
+```
+
+### 평가 지표 (v21.2 포화 문제 해결)
+
+| 지표 | 설명 | v21.2 문제 | v21.3 해결 |
+|------|------|------------|------------|
+| Recall@K | Top-K에 정답 동의어 비율 | N/A | ✓ 구현 |
+| MRR | 첫 정답 순위의 역수 평균 | N/A | ✓ 구현 |
+| nDCG | 순위별 가중치 적용 점수 | N/A | ✓ 구현 |
+| Binary Accuracy | 정답 포함 여부 | 100% 포화 | 사용 안함 |
+
+```python
+# Recall@K
+Recall@K = |Retrieved@K ∩ Relevant| / |Relevant|
+
+# MRR (Mean Reciprocal Rank)
+MRR = (1/|Q|) * Σ (1/rank_i)
+```
+
+### 실행 방법
+
+```bash
+cd notebooks/opensearch-neural-v21.3/
+
+# 1. 데이터 수집 (의료 데이터 포함)
+jupyter nbconvert --execute 00_data_ingestion.ipynb
+
+# 2. 노이즈 필터링 (30-60분 소요)
+jupyter nbconvert --execute 01_noise_filtering.ipynb
+
+# 3. Hard Negative Mining
+jupyter nbconvert --execute 02_data_preparation.ipynb
+
+# 4. 모델 학습 (GPU 필요)
+jupyter nbconvert --execute 03_training.ipynb
+
+# 5. 추론 테스트
+jupyter nbconvert --execute 04_inference_test.ipynb
+```
+
+### 출력 디렉토리
+
+```
+dataset/v21.3_filtered_enhanced/
+├── raw_synonym_pairs.jsonl        # 원본 동의어 쌍
+├── filtered_synonym_pairs.jsonl   # 필터링된 동의어 쌍
+├── removed_synonym_pairs.jsonl    # 제거된 쌍 (분석용)
+├── filtering_stats.json           # 필터링 통계
+├── triplet_dataset/               # HuggingFace Dataset
+├── train_triplets.jsonl           # 학습 데이터
+└── val_triplets.jsonl             # 검증 데이터
+
+outputs/v21.3_korean_enhanced/
+├── best_model.pt                  # 최고 성능 모델
+├── final_model.pt                 # 최종 모델
+├── training_history.json          # 학습 기록
+└── training_curves.png            # 학습 곡선
+```
+
+### 핵심 모듈
+
+| 모듈 | 경로 | 설명 |
+|------|------|------|
+| Information Gain | `src/information_gain.py` | KNN Entropy 기반 IG 계산 |
+| PMI | `src/pmi/` | 동시출현 행렬 및 PMI 계산 |
+| Ranking Metrics | `src/evaluation/ranking_metrics.py` | Recall@K, MRR, nDCG |
+
+---
+
+## v19 Cross-lingual Model (Legacy)
 
 ## Model Specification
 
