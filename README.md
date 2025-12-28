@@ -18,45 +18,45 @@ This repository contains training code for Korean SPLADE-doc models. The models 
 
 ## v21.3 Korean Neural Sparse Encoder (Latest)
 
-v21.3는 데이터 품질과 평가 지표를 알고리즘적/통계적 방법으로 개선한 한국어 Neural Sparse 모델입니다.
+v21.3 is a Korean Neural Sparse model with improved data quality and evaluation metrics using algorithmic/statistical methods.
 
-### v21.2 대비 개선사항
+### Improvements over v21.2
 
-| 항목 | v21.2 | v21.3 |
+| Item | v21.2 | v21.3 |
 |------|-------|-------|
-| 데이터 노이즈 | ~50% (BPE 노이즈) | **< 10%** (3단계 필터링) |
-| 평가 지표 | 100% 포화 (Binary) | **Recall@K, MRR** (비포화) |
-| 의료 데이터 | 로드 실패 | **4개 config 정상 로드** |
-| Hard Negative | Random 샘플링 | **난이도별 균형 샘플링** |
+| Data Noise | ~50% (BPE noise) | **< 10%** (3-stage filtering) |
+| Evaluation Metrics | 100% saturated (Binary) | **Recall@K, MRR** (non-saturating) |
+| Medical Data | Load failure | **4 configs loaded successfully** |
+| Hard Negatives | Random sampling | **Difficulty-balanced sampling** |
 
-### 데이터 전처리 파이프라인
+### Data Preprocessing Pipeline
 
-#### 1. 데이터 수집 (`00_data_ingestion.ipynb`)
+#### 1. Data Ingestion (`00_data_ingestion.ipynb`)
 
-14개 한국어 데이터셋에서 텍스트 수집:
+Collects text from 14 Korean datasets:
 
-| 도메인 | 데이터셋 | 설명 |
+| Domain | Dataset | Description |
 |--------|----------|------|
-| 백과사전 | Wikipedia (ko) | 일반 지식 |
-| QA | KLUE-MRC, KorQuAD | 질의응답 컨텍스트 |
-| 법률 | Korean Law Precedents | 판례, 법률 용어 |
-| **의료** | **KorMedMCQA (4 configs)** | 의사/간호사/약사/치과 자격시험 |
-| 대화 | NSMC, KorHate | 리뷰, 댓글 |
+| Encyclopedia | Wikipedia (ko) | General knowledge |
+| QA | KLUE-MRC, KorQuAD | Question-answering context |
+| Legal | Korean Law Precedents | Case law, legal terminology |
+| **Medical** | **KorMedMCQA (4 configs)** | Doctor/Nurse/Pharmacist/Dentist licensing exams |
+| Dialogue | NSMC, KorHate | Reviews, comments |
 
-**의료 데이터 로드 (v21.2 버그 수정):**
+**Medical Data Loading (v21.2 bug fix):**
 ```python
-# v21.2: 실패 (config 미지정)
+# v21.2: Failed (config not specified)
 load_dataset("sean0042/KorMedMCQA", split="train")  # Error
 
-# v21.3: 성공 (config 명시)
+# v21.3: Success (config explicitly specified)
 medical_configs = ["dentist", "doctor", "nurse", "pharm"]
 for config in medical_configs:
     load_dataset("sean0042/KorMedMCQA", config, split="train")
 ```
 
-#### 2. 노이즈 필터링 (`01_noise_filtering.ipynb`)
+#### 2. Noise Filtering (`01_noise_filtering.ipynb`)
 
-3가지 알고리즘적 필터링을 앙상블로 적용:
+Applies 3 algorithmic filters in an ensemble:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -74,70 +74,70 @@ for config in medical_configs:
                       ▼
               ┌───────────────┐
               │ Majority Vote │
-              │   (2/3 통과)   │
+              │   (2/3 pass)  │
               └───────┬───────┘
                       ▼
               Filtered Pairs
 ```
 
-**필터링 방법:**
+**Filtering Methods:**
 
-| 필터 | 알고리즘 | 목적 | Threshold |
+| Filter | Algorithm | Purpose | Threshold |
 |------|----------|------|-----------|
-| **IG** | KNN Entropy (Kozachenko-Leonenko) | Truncation/Case 변경 제거 | Bottom 10% |
-| **PMI** | 동시출현 확률 (Laplace smoothing) | False positive 제거 | Bottom 10% |
-| **CE** | Cross-Encoder (bge-reranker-v2-m3) | 의미적 비유사 쌍 제거 | Bottom 10% |
+| **IG** | KNN Entropy (Kozachenko-Leonenko) | Remove truncation/case changes | Bottom 10% |
+| **PMI** | Co-occurrence probability (Laplace smoothing) | Remove false positives | Bottom 10% |
+| **CE** | Cross-Encoder (bge-reranker-v2-m3) | Remove semantically dissimilar pairs | Bottom 10% |
 
-**Information Gain 계산:**
+**Information Gain Calculation:**
 ```python
 IG(source → target) = H(target) - H(target|source)
 
-# H(target): 전체 코퍼스에서 target의 entropy
-# H(target|source): source 이웃 내에서 target의 conditional entropy
-# 높은 IG = 의미적 확장이 유의미 (유지)
-# 낮은 IG = 단순 truncation (제거)
+# H(target): Entropy of target in the entire corpus
+# H(target|source): Conditional entropy of target within source neighbors
+# High IG = Meaningful semantic expansion (keep)
+# Low IG = Simple truncation (remove)
 ```
 
-**PMI 계산:**
+**PMI Calculation:**
 ```python
 PMI(x, y) = log(P(x,y) / (P(x) * P(y)))
 
-# 높은 PMI = 동시 출현 빈도 높음 (진짜 동의어)
-# 낮은 PMI = 독립적 출현 (임베딩 유사도만 높은 false positive)
+# High PMI = High co-occurrence frequency (true synonyms)
+# Low PMI = Independent occurrence (false positives with only high embedding similarity)
 ```
 
-**앙상블 결정:**
-- 3개 필터 중 **2개 이상 통과**해야 유지 (다수결 투표)
-- 하드코딩 threshold 없이 **percentile 기반** 자동 결정
+**Ensemble Decision:**
+- Must pass **2 or more of 3 filters** to be retained (majority voting)
+- **Percentile-based** automatic threshold determination (no hardcoded values)
 
-#### 3. 데이터 준비 (`02_data_preparation.ipynb`)
+#### 3. Data Preparation (`02_data_preparation.ipynb`)
 
-**난이도별 Hard Negative Mining:**
+**Difficulty-balanced Hard Negative Mining:**
 
-| 난이도 | 유사도 범위 | 비율 | 특징 |
+| Difficulty | Similarity Range | Ratio | Characteristics |
 |--------|-------------|------|------|
-| Easy | 0.3 - 0.5 | 33% | 쉽게 구분 가능 |
-| Medium | 0.5 - 0.7 | 33% | 중간 난이도 |
-| Hard | 0.7 - 0.9 | 33% | 어려운 negative |
+| Easy | 0.3 - 0.5 | 33% | Easily distinguishable |
+| Medium | 0.5 - 0.7 | 33% | Medium difficulty |
+| Hard | 0.7 - 0.9 | 33% | Difficult negatives |
 
 ```python
-# Triplet 형식: (anchor, positive, negative)
+# Triplet format: (anchor, positive, negative)
 {
     "anchor": "인공지능",
-    "positive": "AI",           # 동의어
-    "negative": "자동화",       # Hard negative (유사하지만 다름)
+    "positive": "AI",           # Synonym
+    "negative": "자동화",       # Hard negative (similar but different)
     "difficulty": "hard"
 }
 ```
 
-### 학습 (`03_training.ipynb`)
+### Training (`03_training.ipynb`)
 
-**모델 구조:**
+**Model Architecture:**
 ```
 Input → A.X-Encoder-base → log(1 + ReLU(logits)) → Max Pooling → Sparse Vector
 ```
 
-**손실 함수:**
+**Loss Function:**
 ```python
 L_total = λ_self * L_self           # Self-reconstruction
         + λ_synonym * L_positive    # Synonym activation
@@ -158,14 +158,14 @@ lambda_flops: 8e-3
 target_margin: 1.5
 ```
 
-### 평가 지표 (v21.2 포화 문제 해결)
+### Evaluation Metrics (Solving v21.2 Saturation Problem)
 
-| 지표 | 설명 | v21.2 문제 | v21.3 해결 |
+| Metric | Description | v21.2 Problem | v21.3 Solution |
 |------|------|------------|------------|
-| Recall@K | Top-K에 정답 동의어 비율 | N/A | ✓ 구현 |
-| MRR | 첫 정답 순위의 역수 평균 | N/A | ✓ 구현 |
-| nDCG | 순위별 가중치 적용 점수 | N/A | ✓ 구현 |
-| Binary Accuracy | 정답 포함 여부 | 100% 포화 | 사용 안함 |
+| Recall@K | Ratio of correct synonyms in Top-K | N/A | ✓ Implemented |
+| MRR | Mean reciprocal rank of first correct answer | N/A | ✓ Implemented |
+| nDCG | Rank-weighted score | N/A | ✓ Implemented |
+| Binary Accuracy | Whether correct answer is included | 100% saturated | Not used |
 
 ```python
 # Recall@K
@@ -175,52 +175,52 @@ Recall@K = |Retrieved@K ∩ Relevant| / |Relevant|
 MRR = (1/|Q|) * Σ (1/rank_i)
 ```
 
-### 실행 방법
+### Execution
 
 ```bash
 cd notebooks/opensearch-neural-v21.3/
 
-# 1. 데이터 수집 (의료 데이터 포함)
+# 1. Data ingestion (including medical data)
 jupyter nbconvert --execute 00_data_ingestion.ipynb
 
-# 2. 노이즈 필터링 (30-60분 소요)
+# 2. Noise filtering (takes 30-60 minutes)
 jupyter nbconvert --execute 01_noise_filtering.ipynb
 
 # 3. Hard Negative Mining
 jupyter nbconvert --execute 02_data_preparation.ipynb
 
-# 4. 모델 학습 (GPU 필요)
+# 4. Model training (GPU required)
 jupyter nbconvert --execute 03_training.ipynb
 
-# 5. 추론 테스트
+# 5. Inference test
 jupyter nbconvert --execute 04_inference_test.ipynb
 ```
 
-### 출력 디렉토리
+### Output Directories
 
 ```
 dataset/v21.3_filtered_enhanced/
-├── raw_synonym_pairs.jsonl        # 원본 동의어 쌍
-├── filtered_synonym_pairs.jsonl   # 필터링된 동의어 쌍
-├── removed_synonym_pairs.jsonl    # 제거된 쌍 (분석용)
-├── filtering_stats.json           # 필터링 통계
+├── raw_synonym_pairs.jsonl        # Raw synonym pairs
+├── filtered_synonym_pairs.jsonl   # Filtered synonym pairs
+├── removed_synonym_pairs.jsonl    # Removed pairs (for analysis)
+├── filtering_stats.json           # Filtering statistics
 ├── triplet_dataset/               # HuggingFace Dataset
-├── train_triplets.jsonl           # 학습 데이터
-└── val_triplets.jsonl             # 검증 데이터
+├── train_triplets.jsonl           # Training data
+└── val_triplets.jsonl             # Validation data
 
 outputs/v21.3_korean_enhanced/
-├── best_model.pt                  # 최고 성능 모델
-├── final_model.pt                 # 최종 모델
-├── training_history.json          # 학습 기록
-└── training_curves.png            # 학습 곡선
+├── best_model.pt                  # Best performance model
+├── final_model.pt                 # Final model
+├── training_history.json          # Training history
+└── training_curves.png            # Training curves
 ```
 
-### 핵심 모듈
+### Core Modules
 
-| 모듈 | 경로 | 설명 |
+| Module | Path | Description |
 |------|------|------|
-| Information Gain | `src/information_gain.py` | KNN Entropy 기반 IG 계산 |
-| PMI | `src/pmi/` | 동시출현 행렬 및 PMI 계산 |
+| Information Gain | `src/information_gain.py` | KNN Entropy-based IG calculation |
+| PMI | `src/pmi/` | Co-occurrence matrix and PMI calculation |
 | Ranking Metrics | `src/evaluation/ranking_metrics.py` | Recall@K, MRR, nDCG |
 
 ---
