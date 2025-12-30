@@ -18,49 +18,65 @@ This repository contains training code for Korean SPLADE-doc models. The models 
 
 ## v21.3 Korean Neural Sparse Encoder (Latest)
 
-v21.3 is a Korean Neural Sparse model with improved data quality and evaluation metrics using algorithmic/statistical methods.
+v21.3 is a Korean Neural Sparse model with improved data quality using algorithmic/statistical filtering methods.
 
-### Improvements over v21.2
+### Data Statistics
 
-| Item | v21.2 | v21.3 |
-|------|-------|-------|
-| Data Noise | ~50% (BPE noise) | **< 10%** (3-stage filtering) |
-| Evaluation Metrics | 100% saturated (Binary) | **Recall@K, MRR** (non-saturating) |
-| Medical Data | Load failure | **4 configs loaded successfully** |
-| Hard Negatives | Random sampling | **Difficulty-balanced sampling** |
+| Metric | Value |
+|--------|-------|
+| Corpus Documents | 646,700 |
+| Term Embeddings | 150,000 |
+| Raw Synonym Pairs | 75,732 |
+| Filtered Synonym Pairs | 66,070 (87.2%) |
+| Removed Pairs | 9,662 (12.8%) |
+| Unique Anchors | 28,371 |
+| Training Triplets | 315,729 |
+| Validation Triplets | 35,081 |
+
+---
 
 ### Data Preprocessing Pipeline
 
-#### 1. Data Ingestion (`00_data_ingestion.ipynb`)
+#### Step 1: Data Ingestion (`00_data_ingestion.ipynb`)
 
-Collects text from 14 Korean datasets:
+Collects text from 14 Korean datasets across multiple domains:
 
-| Domain | Dataset | Description |
-|--------|----------|------|
-| Encyclopedia | Wikipedia (ko) | General knowledge |
-| QA | KLUE-MRC, KorQuAD | Question-answering context |
-| Legal | Korean Law Precedents | Case law, legal terminology |
-| **Medical** | **KorMedMCQA (4 configs)** | Doctor/Nurse/Pharmacist/Dentist licensing exams |
-| Dialogue | NSMC, KorHate | Reviews, comments |
+| Domain | Dataset | Description | Documents |
+|--------|---------|-------------|-----------|
+| Encyclopedia | Wikipedia (ko) | General knowledge | ~500,000 |
+| QA | KLUE-MRC | Machine reading comprehension | ~17,000 |
+| QA | KorQuAD 1.0/2.0 | Korean question answering | ~70,000 |
+| Legal | Korean Law Precedents | Case law, legal terminology | ~30,000 |
+| Medical | KorMedMCQA (doctor) | Doctor licensing exam | ~6,000 |
+| Medical | KorMedMCQA (nurse) | Nurse licensing exam | ~6,000 |
+| Medical | KorMedMCQA (pharm) | Pharmacist licensing exam | ~6,000 |
+| Medical | KorMedMCQA (dentist) | Dentist licensing exam | ~3,000 |
+| Dialogue | NSMC | Naver movie reviews | ~150,000 |
+| Dialogue | KorHate | Hate speech comments | ~8,000 |
 
-**Medical Data Loading (v21.2 bug fix):**
+**Processing Steps:**
+
+1. **Text Extraction**: Extract text fields from each dataset
+2. **Noun Extraction**: Use Kiwi tokenizer to extract nouns (NNG, NNP, NNB, SL, SH tags)
+3. **Embedding Generation**: Generate 1024-dim embeddings using `intfloat/multilingual-e5-large`
+4. **Synonym Mining**: Find similar term pairs using cosine similarity (threshold > 0.85)
+
 ```python
-# v21.2: Failed (config not specified)
-load_dataset("sean0042/KorMedMCQA", split="train")  # Error
-
-# v21.3: Success (config explicitly specified)
-medical_configs = ["dentist", "doctor", "nurse", "pharm"]
-for config in medical_configs:
-    load_dataset("sean0042/KorMedMCQA", config, split="train")
+# Kiwi tokenizer configuration
+VALID_POS_TAGS = {'NNG', 'NNP', 'NNB', 'SL', 'SH'}  # Nouns only
+MIN_TERM_LENGTH = 2
+MAX_TERM_LENGTH = 15
 ```
 
-#### 2. Noise Filtering (`01_noise_filtering.ipynb`)
+---
 
-Applies 3 algorithmic filters in an ensemble:
+#### Step 2: Noise Filtering (`01_noise_filtering.ipynb`)
+
+Raw embedding-based synonym pairs contain significant noise (truncations, false positives). Three algorithmic filters are applied in an ensemble:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Raw Synonym Pairs                         │
+│              Raw Synonym Pairs (75,732)                      │
 └─────────────────────┬───────────────────────────────────────┘
                       │
          ┌────────────┼────────────┐
@@ -68,66 +84,204 @@ Applies 3 algorithmic filters in an ensemble:
     ┌─────────┐  ┌─────────┐  ┌─────────┐
     │   IG    │  │   PMI   │  │   CE    │
     │ Filter  │  │ Filter  │  │ Filter  │
+    │ (90%)   │  │ (34%)   │  │ (90%)   │
     └────┬────┘  └────┬────┘  └────┬────┘
          │            │            │
          └────────────┼────────────┘
                       ▼
               ┌───────────────┐
               │ Majority Vote │
-              │   (2/3 pass)  │
+              │   (≥2/3 pass) │
               └───────┬───────┘
                       ▼
-              Filtered Pairs
+              Filtered Pairs (66,070)
 ```
 
-**Filtering Methods:**
+##### Filter 1: Information Gain (IG)
 
-| Filter | Algorithm | Purpose | Threshold |
-|------|----------|------|-----------|
-| **IG** | KNN Entropy (Kozachenko-Leonenko) | Remove truncation/case changes | Bottom 10% |
-| **PMI** | Co-occurrence probability (Laplace smoothing) | Remove false positives | Bottom 10% |
-| **CE** | Cross-Encoder (bge-reranker-v2-m3) | Remove semantically dissimilar pairs | Bottom 10% |
+Measures semantic expansion value using KNN entropy estimation (Kozachenko-Leonenko estimator).
 
-**Information Gain Calculation:**
+**Algorithm:**
 ```python
 IG(source → target) = H(target) - H(target|source)
 
-# H(target): Entropy of target in the entire corpus
-# H(target|source): Conditional entropy of target within source neighbors
-# High IG = Meaningful semantic expansion (keep)
-# Low IG = Simple truncation (remove)
+# H(target): Marginal entropy in entire embedding space
+# H(target|source): Conditional entropy within source's k-nearest neighbors
 ```
 
-**PMI Calculation:**
+**Configuration:**
 ```python
-PMI(x, y) = log(P(x,y) / (P(x) * P(y)))
-
-# High PMI = High co-occurrence frequency (true synonyms)
-# Low PMI = Independent occurrence (false positives with only high embedding similarity)
+k_entropy = 10           # k for entropy estimation
+k_neighborhood = 50      # k for neighborhood definition
+percentile_threshold = 10.0  # Remove bottom 10%
 ```
 
-**Ensemble Decision:**
-- Must pass **2 or more of 3 filters** to be retained (majority voting)
-- **Percentile-based** automatic threshold determination (no hardcoded values)
+**What it catches:**
+- Truncation pairs: `다음날오전 → 다음날` (low IG)
+- Case changes: `iPhone → iphone` (low IG)
 
-#### 3. Data Preparation (`02_data_preparation.ipynb`)
+**Results:**
+- Threshold: 2.1905
+- Pass rate: 90.0% (68,158 pairs)
 
-**Difficulty-balanced Hard Negative Mining:**
+##### Filter 2: Pointwise Mutual Information (PMI)
 
-| Difficulty | Similarity Range | Ratio | Characteristics |
-|--------|-------------|------|------|
-| Easy | 0.3 - 0.5 | 33% | Easily distinguishable |
-| Medium | 0.5 - 0.7 | 33% | Medium difficulty |
-| Hard | 0.7 - 0.9 | 33% | Difficult negatives |
+Measures co-occurrence probability in the corpus using Laplace-smoothed PMI.
+
+**Algorithm:**
+```python
+PMI(x, y) = log2(P(x,y) / (P(x) * P(y)))
+
+# P(x,y): Joint probability (co-occurrence in same sentence)
+# P(x), P(y): Marginal probabilities
+```
+
+**Co-occurrence Matrix Construction:**
+```python
+window_type = "sentence"      # Sentence-level co-occurrence
+min_term_freq = 5             # Minimum term frequency
+max_vocab_size = 120,000      # Maximum vocabulary
+symmetric = True              # Bidirectional co-occurrence
+laplace_smoothing = 1.0       # Laplace smoothing factor
+```
+
+**Statistics:**
+- Vocabulary size: 120,000 terms
+- Total windows: 5,599,725
+- Total co-occurrences: 66,162,183
+
+**What it catches:**
+- False positives with high embedding similarity but no corpus co-occurrence
+- Example: Random similar-sounding terms that never appear together
+
+**Results:**
+- Threshold: 0.4312
+- Valid scores: 28,642 (47,090 OOV)
+- Pass rate: 34.0% (25,778 pairs)
+
+##### Filter 3: Cross-Encoder (CE)
+
+Validates semantic similarity using a neural cross-encoder model.
+
+**Model:**
+```python
+model = "BAAI/bge-reranker-v2-m3"
+normalize = True
+use_fp16 = True
+batch_size = 256
+```
+
+**What it catches:**
+- Semantically dissimilar pairs that have similar surface forms
+- Example: `동계올림픽 → 하계올림픽` (winter vs summer - opposites)
+
+**Results:**
+- Threshold: 0.4287
+- Pass rate: 90.0% (68,158 pairs)
+
+##### Ensemble Voting
+
+A pair is **kept** if it passes at least 2 of 3 filters:
+
+| Filters Passed | Count | Percentage | Decision |
+|----------------|-------|------------|----------|
+| 0/3 | 666 | 0.9% | REMOVE |
+| 1/3 | 8,996 | 11.9% | REMOVE |
+| 2/3 | 45,112 | 59.6% | KEEP |
+| 3/3 | 20,958 | 27.7% | KEEP |
+
+**Filter Combination Analysis:**
+
+| IG | PMI | CE | Count | Decision |
+|----|-----|-----|-------|----------|
+| ✓ | ✗ | ✓ | 40,751 | KEEP |
+| ✓ | ✓ | ✓ | 20,958 | KEEP |
+| ✗ | ✗ | ✓ | 4,564 | REMOVE |
+| ✓ | ✗ | ✗ | 3,973 | REMOVE |
+| ✓ | ✓ | ✗ | 2,476 | KEEP |
+| ✗ | ✓ | ✓ | 1,885 | KEEP |
+
+**Examples of Correctly Removed Pairs:**
+```
+다음날오전 → 다음날오후    (opposite: morning vs afternoon)
+동계올림픽 → 하계올림픽    (opposite: winter vs summer)
+북쪽출구 → 남쪽출구       (opposite: north vs south)
+MBC대하드라마 → SBS대하드라마 (different companies)
+```
+
+**Examples of Correctly Kept Pairs:**
+```
+Keyboard → 키보드          (EN-KO translation)
+bytes → byte              (singular/plural)
+제천 → 제천시              (place name variant)
+화산 → 화산학              (term + field)
+```
+
+---
+
+#### Step 3: Data Preparation (`02_data_preparation.ipynb`)
+
+Creates triplet dataset with difficulty-balanced hard negatives for contrastive learning.
+
+##### Hard Negative Mining
+
+For each anchor, negatives are sampled from different similarity ranges:
+
+| Difficulty | Similarity Range | Target Ratio | Actual Ratio |
+|------------|------------------|--------------|--------------|
+| Easy | 0.3 - 0.5 | 33% | 27.3% |
+| Medium | 0.5 - 0.7 | 33% | 20.1% |
+| Hard | 0.7 - 0.9 | 34% | 52.6% |
+
+**Algorithm:**
+```python
+def mine_hard_negatives(anchor, positives, embeddings):
+    # Compute similarity to all terms
+    similarities = cosine_similarity(anchor_emb, all_embeddings)
+
+    # Categorize candidates by difficulty
+    easy = [t for t, sim in candidates if 0.3 <= sim < 0.5]
+    medium = [t for t, sim in candidates if 0.5 <= sim < 0.7]
+    hard = [t for t, sim in candidates if 0.7 <= sim < 0.9]
+
+    # Sample with balanced ratios
+    return sample_balanced(easy, medium, hard, n=5)
+```
+
+##### Triplet Format
 
 ```python
-# Triplet format: (anchor, positive, negative)
 {
     "anchor": "인공지능",
-    "positive": "AI",           # Synonym
+    "positive": "AI",           # Ground truth synonym
     "negative": "자동화",       # Hard negative (similar but different)
+    "negative_similarity": 0.72,
     "difficulty": "hard"
 }
+```
+
+##### Dataset Split
+
+| Split | Triplets | Ratio |
+|-------|----------|-------|
+| Train | 315,729 | 90% |
+| Validation | 35,081 | 10% |
+
+##### Output Files
+
+```
+dataset/v21.3_filtered_enhanced/
+├── raw_synonym_pairs.jsonl        # 75,732 raw pairs
+├── filtered_synonym_pairs.jsonl   # 66,070 filtered pairs
+├── removed_synonym_pairs.jsonl    # 9,662 removed pairs
+├── filtering_stats.json           # Filter statistics
+├── corpus_texts.jsonl             # 646,700 corpus documents
+├── term_embeddings.npy            # 150,000 x 1024 embeddings
+├── term_list.json                 # Term vocabulary
+├── cooccurrence_matrix/           # PMI co-occurrence data
+├── triplet_dataset/               # HuggingFace Dataset
+├── train_triplets.jsonl           # Training data
+└── val_triplets.jsonl             # Validation data
 ```
 
 ### Training (`03_training.ipynb`)
