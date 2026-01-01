@@ -26,3 +26,8 @@ dataset/*
 opensearch-korean-neural-sparse-v1*
 test_korean_neural_sparse_model/
 best_korean_neural_sparse_encoder.pt
+# Papermill output notebooks
+*_output.ipynb
+
+# Training data
+data/
