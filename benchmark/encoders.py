@@ -103,15 +103,23 @@ class NeuralSparseEncoder:
             self.tokenizer.sep_token_id,
             self.tokenizer.pad_token_id,
             self.tokenizer.unk_token_id,
+            self.tokenizer.bos_token_id,
+            self.tokenizer.eos_token_id,
         }
         # Remove None values
         self.special_token_ids = {
             tid for tid in self.special_token_ids if tid is not None
         }
 
+        # Pre-build token lookup table for fast decoding
+        self._token_lookup = self.tokenizer.convert_ids_to_tokens(
+            list(range(self.vocab_size))
+        )
+
         logger.info(
             f"Neural sparse model loaded, vocab_size: {self.vocab_size}"
         )
+        logger.info(f"Built token lookup table with {len(self._token_lookup)} entries")
 
     @torch.no_grad()
     def encode(
@@ -170,8 +178,9 @@ class NeuralSparseEncoder:
                         continue
                     weight = vec[idx].item()
                     if weight > 0:
-                        token = self.tokenizer.decode([idx]).strip()
-                        if token:
+                        token = self._token_lookup[idx]
+                        # Skip special tokens (prefixed with [ or <)
+                        if token and not token.startswith(("[", "<")):
                             sparse_dict[token] = weight
 
                 # Apply top-k filtering if specified
