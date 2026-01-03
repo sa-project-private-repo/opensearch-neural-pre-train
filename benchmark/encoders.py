@@ -5,13 +5,18 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import gc
+
 import numpy as np
 import torch
 import torch.nn as nn
 from sentence_transformers import SentenceTransformer
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from benchmark.config import BenchmarkConfig
+from benchmark.dataset import TextDataset
 
 logger = logging.getLogger(__name__)
 
@@ -121,19 +126,93 @@ class NeuralSparseEncoder:
         )
         logger.info(f"Built token lookup table with {len(self._token_lookup)} entries")
 
+    def _create_collate_fn(self):
+        """Create collate function for DataLoader."""
+
+        def collate_fn(batch_texts: List[str]):
+            return self.tokenizer(
+                batch_texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length,
+            )
+
+        return collate_fn
+
+    @torch.no_grad()
+    def _encode_batch(
+        self,
+        inputs: Dict[str, torch.Tensor],
+        top_k: Optional[int] = None,
+    ) -> List[Dict[str, float]]:
+        """
+        Encode a single batch to sparse vectors.
+
+        Args:
+            inputs: Tokenized inputs on device
+            top_k: Only keep top-k activations
+
+        Returns:
+            List of sparse vectors for this batch
+        """
+        outputs = self.model(**inputs)
+        logits = outputs.logits
+
+        # Apply SPLADE transformation: log(1 + ReLU(logits))
+        token_scores = torch.log1p(self.relu(logits))
+
+        # Apply attention mask
+        mask = inputs["attention_mask"].unsqueeze(-1).float()
+        masked_scores = token_scores * mask
+
+        # Max pooling over sequence dimension
+        sparse_repr, _ = masked_scores.max(dim=1)
+
+        # Convert to sparse dictionaries using pre-built lookup
+        batch_vectors = []
+        for j in range(sparse_repr.size(0)):
+            vec = sparse_repr[j].cpu()  # Move to CPU for dict building
+            nonzero_mask = vec > 0
+            nonzero_indices = nonzero_mask.nonzero(as_tuple=True)[0]
+
+            sparse_dict = {}
+            for idx in nonzero_indices.tolist():
+                if idx in self.special_token_ids:
+                    continue
+                weight = vec[idx].item()
+                token = self._token_lookup[idx]
+                # Skip special tokens (prefixed with [ or <)
+                if token and not token.startswith(("[", "<")):
+                    sparse_dict[token] = weight
+
+            if top_k is not None and len(sparse_dict) > top_k:
+                sorted_items = sorted(
+                    sparse_dict.items(),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )
+                sparse_dict = dict(sorted_items[:top_k])
+
+            batch_vectors.append(sparse_dict)
+
+        return batch_vectors
+
     @torch.no_grad()
     def encode(
         self,
         texts: Union[str, List[str]],
         batch_size: int = 32,
+        num_workers: int = 4,
         top_k: Optional[int] = None,
     ) -> List[Dict[str, float]]:
         """
-        Encode texts to sparse vectors.
+        Encode texts to sparse vectors using parallel DataLoader.
 
         Args:
             texts: Single text or list of texts
             batch_size: Batch size for encoding
+            num_workers: Number of parallel workers for data loading
             top_k: Only keep top-k activations (None for all)
 
         Returns:
@@ -142,57 +221,33 @@ class NeuralSparseEncoder:
         if isinstance(texts, str):
             texts = [texts]
 
+        dataset = TextDataset(texts)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=self._create_collate_fn(),
+            pin_memory=True if self.device != "cpu" else False,
+        )
+
         all_sparse_vectors = []
+        show_progress = len(texts) > 100
 
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i : i + batch_size]
-            inputs = self.tokenizer(
-                batch_texts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-            ).to(self.device)
+        for batch_idx, inputs in enumerate(
+            tqdm(dataloader, desc="Sparse encoding", disable=not show_progress)
+        ):
+            # Move inputs to device
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            outputs = self.model(**inputs)
-            logits = outputs.logits
+            # Encode batch
+            batch_vectors = self._encode_batch(inputs, top_k)
+            all_sparse_vectors.extend(batch_vectors)
 
-            # Apply SPLADE transformation: log(1 + ReLU(logits))
-            token_scores = torch.log1p(self.relu(logits))
-
-            # Apply attention mask
-            mask = inputs["attention_mask"].unsqueeze(-1).float()
-            masked_scores = token_scores * mask
-
-            # Max pooling over sequence dimension
-            sparse_repr, _ = masked_scores.max(dim=1)
-
-            # Convert to sparse dictionaries
-            for j in range(sparse_repr.size(0)):
-                vec = sparse_repr[j]
-                nonzero_indices = vec.nonzero(as_tuple=True)[0]
-
-                sparse_dict = {}
-                for idx in nonzero_indices.tolist():
-                    if idx in self.special_token_ids:
-                        continue
-                    weight = vec[idx].item()
-                    if weight > 0:
-                        token = self._token_lookup[idx]
-                        # Skip special tokens (prefixed with [ or <)
-                        if token and not token.startswith(("[", "<")):
-                            sparse_dict[token] = weight
-
-                # Apply top-k filtering if specified
-                if top_k is not None and len(sparse_dict) > top_k:
-                    sorted_items = sorted(
-                        sparse_dict.items(),
-                        key=lambda x: x[1],
-                        reverse=True,
-                    )
-                    sparse_dict = dict(sorted_items[:top_k])
-
-                all_sparse_vectors.append(sparse_dict)
+            # Periodic memory cleanup
+            if batch_idx % 100 == 0:
+                torch.cuda.empty_cache()
+                gc.collect()
 
         return all_sparse_vectors
 
