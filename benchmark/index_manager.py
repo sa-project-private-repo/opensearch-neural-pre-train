@@ -41,6 +41,7 @@ class IndexManager:
             use_ssl=self.config.use_ssl,
             verify_certs=self.config.verify_certs,
             connection_class=RequestsHttpConnection,
+            timeout=120,  # 2 minutes for bulk operations with large vectors
         )
 
     def create_bm25_index(self) -> None:
