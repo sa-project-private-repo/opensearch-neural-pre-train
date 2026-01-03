@@ -30,6 +30,7 @@ def encode_documents(
     dense_encoder: BgeM3Encoder,
     sparse_encoder: NeuralSparseEncoder,
     batch_size: int = 32,
+    num_workers: int = 4,
 ) -> List[EncodedDocument]:
     """
     Encode all documents with both encoders.
@@ -39,6 +40,7 @@ def encode_documents(
         dense_encoder: Dense encoder (bge-m3)
         sparse_encoder: Sparse encoder (v21.4)
         batch_size: Batch size for encoding
+        num_workers: Number of parallel workers for sparse encoding
 
     Returns:
         List of encoded documents
@@ -52,9 +54,11 @@ def encode_documents(
     logger.info("Generating dense embeddings...")
     dense_embeddings = dense_encoder.encode(contents, batch_size=batch_size)
 
-    # Sparse encoding
+    # Sparse encoding with parallel workers
     logger.info("Generating sparse embeddings...")
-    sparse_embeddings = sparse_encoder.encode(contents, batch_size=batch_size)
+    sparse_embeddings = sparse_encoder.encode(
+        contents, batch_size=batch_size, num_workers=num_workers
+    )
 
     # Combine
     encoded_docs = []
