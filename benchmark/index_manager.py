@@ -99,8 +99,8 @@ class IndexManager:
                         "dimension": 1024,
                         "method": {
                             "name": "hnsw",
-                            "engine": "nmslib",
-                            "space_type": "cosinesimil",
+                            "engine": "faiss",
+                            "space_type": "innerproduct",
                             "parameters": {
                                 "ef_construction": 128,
                                 "m": 16,
@@ -171,8 +171,8 @@ class IndexManager:
                         "dimension": 1024,
                         "method": {
                             "name": "hnsw",
-                            "engine": "nmslib",
-                            "space_type": "cosinesimil",
+                            "engine": "faiss",
+                            "space_type": "innerproduct",
                             "parameters": {
                                 "ef_construction": 128,
                                 "m": 16,

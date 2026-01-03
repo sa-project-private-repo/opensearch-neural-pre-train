@@ -9,5 +9,6 @@ Compares 4 search methods:
 """
 
 from benchmark.config import BenchmarkConfig
+from benchmark.runner import BenchmarkRunner
 
-__all__ = ["BenchmarkConfig"]
+__all__ = ["BenchmarkConfig", "BenchmarkRunner"]

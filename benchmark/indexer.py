@@ -2,6 +2,7 @@
 Document indexing for benchmark.
 """
 import logging
+from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional
 
 from tqdm import tqdm
@@ -22,9 +23,6 @@ class EncodedDocument:
     content: str
     dense_embedding: List[float]
     sparse_embedding: Dict[str, float]
-
-
-from dataclasses import dataclass
 
 
 def encode_documents(
