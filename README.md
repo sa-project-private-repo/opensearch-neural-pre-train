@@ -219,13 +219,78 @@ Training data is loaded from HuggingFace datasets:
 
 ### Training Data Format
 
-```python
-{
-    "anchor": "당뇨병",
-    "positive": "diabetes",       # Synonym/translation
-    "negative": "고혈압",          # Hard negative
-}
+Training data uses JSONL (JSON Lines) format where each line is a triplet:
+
 ```
+data/v21.4/
+├── training_triplets.jsonl      # Main training set (~423K triplets)
+├── validation_triplets.jsonl    # Validation set (~47K triplets)
+├── phase1_single_term_focus_triplets.jsonl  # Curriculum phase 1
+├── phase2_balanced_triplets.jsonl           # Curriculum phase 2
+└── phase3_full_triplets.jsonl               # Curriculum phase 3
+```
+
+#### Triplet Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `anchor` | string | Input text (query or term) |
+| `positive` | string | Semantically similar text (synonym, paraphrase) |
+| `negative` | string | Hard negative (different meaning) |
+| `difficulty` | string | `easy`, `medium`, `hard` |
+| `length_class` | string | `single_term`, `short_phrase`, `sentence` |
+| `pair_type` | string | Data source identifier |
+
+#### Examples
+
+**Single-term synonym (Korean):**
+```json
+{"anchor": "추천", "positive": "권장", "negative": "반대", "difficulty": "easy", "length_class": "single_term", "pair_type": "single_term"}
+```
+
+**Spelling variation:**
+```json
+{"anchor": "인터컨티넨탈", "positive": "인터콘티넨탈", "negative": "힐튼", "difficulty": "easy", "length_class": "short_phrase", "pair_type": "original"}
+```
+
+**Question-Answer pair (KorQuAD):**
+```json
+{"anchor": "대한민국의 수도는 어디인가?", "positive": "서울은 대한민국의 수도이다", "negative": "부산은 항구도시이다", "difficulty": "medium", "length_class": "sentence", "pair_type": "korquad"}
+```
+
+**Medical terminology:**
+```json
+{"anchor": "당뇨병", "positive": "diabetes mellitus", "negative": "고혈압", "difficulty": "medium", "length_class": "single_term", "pair_type": "original"}
+```
+
+**MS MARCO Korean:**
+```json
+{"anchor": "비타민D 결핍 증상", "positive": "비타민D가 부족하면 뼈가 약해지고 피로감이 증가합니다", "negative": "비타민C는 면역력 강화에 도움이 됩니다", "difficulty": "hard", "length_class": "sentence", "pair_type": "msmarco_ko"}
+```
+
+#### Data Distribution
+
+| Pair Type | Count | Description |
+|-----------|-------|-------------|
+| original | 151K | Wikipedia entities, synonyms |
+| msmarco_ko | 97K | MS MARCO Korean translation |
+| korquad | 54K | KorQuAD question-context pairs |
+| korquad_context | 54K | KorQuAD context-question pairs |
+| naver_news | 35K | News article pairs |
+| klue_nli | 15K | KLUE NLI entailment pairs |
+| klue_sts | 11K | KLUE STS similar sentences |
+| kobest_copa | 6K | KoBEST COPA reasoning pairs |
+| single_term | 448 | Explicit single-term synonyms |
+
+#### Curriculum Learning Phases
+
+v21.4 uses 3-phase curriculum learning:
+
+| Phase | Epochs | Focus | Lambda Self |
+|-------|--------|-------|-------------|
+| Phase 1 | 1-10 | Single-term pairs (100%) | 8.0 |
+| Phase 2 | 11-20 | Balanced mix (50% single-term) | 6.0 |
+| Phase 3 | 21-30 | Full dataset | 4.0 |
 
 ---
 
