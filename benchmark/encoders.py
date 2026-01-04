@@ -256,13 +256,16 @@ class NeuralSparseEncoder:
         result = self.encode([text], batch_size=1, top_k=top_k)
         return result[0]
 
+    @torch.no_grad()
     def encode_for_query(
         self,
         text: str,
         top_k: int = 100,
     ) -> Dict[str, float]:
         """
-        Encode query text for searching.
+        Encode query text for searching (optimized for single query).
+
+        This method bypasses DataLoader overhead for fast single-query encoding.
 
         Args:
             text: Query text
@@ -271,7 +274,18 @@ class NeuralSparseEncoder:
         Returns:
             Sparse vector as {token: weight} dict
         """
-        return self.encode_single(text, top_k=top_k)
+        # Direct tokenization without DataLoader
+        inputs = self.tokenizer(
+            text,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+        )
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        # Encode and return
+        return self._encode_batch(inputs, top_k)[0]
 
 
 def create_encoders(config: BenchmarkConfig) -> tuple:

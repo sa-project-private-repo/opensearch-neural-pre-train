@@ -5,9 +5,11 @@ import argparse
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from threading import Lock
+from typing import Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -79,7 +81,7 @@ class BenchmarkRunner:
         )
         logger.info(f"Indexed documents: {counts}")
 
-    def run_benchmark(self) -> None:
+    def run_benchmark(self, parallel: bool = False) -> None:
         """Run benchmark for all search methods."""
         logger.info("=== BENCHMARK PHASE ===")
 
@@ -95,7 +97,18 @@ class BenchmarkRunner:
         queries = self.data.queries
         query_positive_ids = self.data.query_positive_ids
 
-        # Run each search method
+        if parallel:
+            self._run_benchmark_parallel(searchers, queries, query_positive_ids)
+        else:
+            self._run_benchmark_sequential(searchers, queries, query_positive_ids)
+
+    def _run_benchmark_sequential(
+        self,
+        searchers: Dict[str, BaseSearcher],
+        queries: List[str],
+        query_positive_ids: Dict[str, str],
+    ) -> None:
+        """Run benchmark sequentially for all search methods."""
         for method_name, searcher in searchers.items():
             logger.info(f"Running {method_name} benchmark...")
             results = self._run_method(
@@ -106,6 +119,91 @@ class BenchmarkRunner:
             )
             self.results[method_name] = results
             self.metrics[method_name] = compute_metrics(method_name, results)
+            logger.info(
+                f"{method_name}: Recall@1={self.metrics[method_name].recall_at_1:.4f}, "
+                f"MRR={self.metrics[method_name].mrr:.4f}"
+            )
+
+    def _run_benchmark_parallel(
+        self,
+        searchers: Dict[str, BaseSearcher],
+        queries: List[str],
+        query_positive_ids: Dict[str, str],
+    ) -> None:
+        """Run benchmark in parallel for all search methods."""
+        logger.info(f"Running {len(searchers)} search methods in parallel...")
+
+        # Create progress bars for each method
+        progress_bars = {
+            name: tqdm(total=len(queries), desc=name, position=i)
+            for i, name in enumerate(searchers.keys())
+        }
+        progress_lock = Lock()
+
+        def run_single_query(
+            method_name: str,
+            searcher: BaseSearcher,
+            query: str,
+            target_doc_id: str,
+        ) -> Tuple[str, QueryResult]:
+            """Run a single query for a method."""
+            try:
+                response = searcher.search(query)
+                retrieved_ids = [r.doc_id for r in response.results]
+                result = QueryResult(
+                    query=query,
+                    target_doc_id=target_doc_id,
+                    retrieved_doc_ids=retrieved_ids,
+                    latency_ms=response.latency_ms,
+                )
+            except Exception as e:
+                logger.warning(f"Search failed for {method_name} query '{query}': {e}")
+                result = QueryResult(
+                    query=query,
+                    target_doc_id=target_doc_id,
+                    retrieved_doc_ids=[],
+                    latency_ms=0,
+                    hit_rank=None,
+                )
+
+            with progress_lock:
+                progress_bars[method_name].update(1)
+
+            return method_name, result
+
+        # Initialize results
+        for method_name in searchers.keys():
+            self.results[method_name] = []
+
+        # Submit all tasks
+        with ThreadPoolExecutor(max_workers=len(searchers)) as executor:
+            futures = []
+            for query in queries:
+                target_doc_id = query_positive_ids[query]
+                for method_name, searcher in searchers.items():
+                    future = executor.submit(
+                        run_single_query,
+                        method_name,
+                        searcher,
+                        query,
+                        target_doc_id,
+                    )
+                    futures.append(future)
+
+            # Collect results
+            for future in as_completed(futures):
+                method_name, result = future.result()
+                self.results[method_name].append(result)
+
+        # Close progress bars
+        for pbar in progress_bars.values():
+            pbar.close()
+
+        # Compute metrics
+        for method_name in searchers.keys():
+            self.metrics[method_name] = compute_metrics(
+                method_name, self.results[method_name]
+            )
             logger.info(
                 f"{method_name}: Recall@1={self.metrics[method_name].recall_at_1:.4f}, "
                 f"MRR={self.metrics[method_name].mrr:.4f}"
@@ -239,6 +337,11 @@ def main():
         help="Delete indices after benchmark",
     )
     parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run all search methods in parallel",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default="outputs/benchmark",
@@ -264,7 +367,7 @@ def main():
             runner.data = load_benchmark_data(config)
 
         # Run benchmark
-        runner.run_benchmark()
+        runner.run_benchmark(parallel=args.parallel)
 
         # Generate report
         output_dir = Path(args.output_dir)
