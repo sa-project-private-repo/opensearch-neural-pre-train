@@ -1,0 +1,121 @@
+# V22 Curriculum Training Configuration
+# Neural Sparse model training with InfoNCE loss and temperature annealing
+#
+# Usage:
+#   python -m train v22 --config configs/train_v22.yaml
+#   make train-v22
+
+# Model Configuration
+model:
+  name: "skt/kobert-base-v1"  # Base Korean BERT model
+  dropout: 0.1
+  use_expansion: true         # Use MLM-based vocabulary expansion
+  expansion_mode: "mlm"       # "mlm" or "projection"
+  freeze_encoder_layers: 0    # Freeze first N transformer layers
+
+# Data Configuration
+data:
+  train_files:
+    - "data/v22.0/train_*.jsonl"
+    - "data/v22.0/augmented_*.jsonl"
+  val_files:
+    - "data/v22.0/val_*.jsonl"
+  batch_size: 64
+  max_length: 64
+  num_workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+
+# Loss Configuration (SPLADELossV22)
+loss:
+  # Loss weights
+  lambda_infonce: 2.0      # InfoNCE contrastive loss
+  lambda_self: 4.0         # Self-reconstruction loss
+  lambda_positive: 10.0    # Positive activation loss
+  lambda_margin: 2.5       # Triplet margin loss
+  lambda_flops: 0.005      # FLOPS regularization (5e-3)
+  lambda_min_act: 1.0      # Minimum activation loss
+
+  # Loss hyperparameters
+  temperature: 0.07        # Initial temperature (will be annealed)
+  margin: 1.5              # Triplet margin
+  top_k: 5                 # Top-k for minimum activation
+  min_activation: 0.5      # Minimum activation threshold
+
+# Training Configuration
+training:
+  num_epochs: 30
+  learning_rate: 0.000003  # 3e-6
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 1
+
+  # Mixed precision (bf16 recommended for A100/H100, fp16 for others)
+  mixed_precision: "bf16"
+
+  # Checkpointing
+  save_every_n_epochs: 5
+  save_every_n_steps: null  # null = use epoch-based saving
+  keep_last_n_checkpoints: 3
+
+  # Logging
+  log_every_n_steps: 50
+  eval_every_n_steps: null  # null = evaluate at epoch end
+
+  # Output
+  output_dir: "outputs/train_v22"
+  experiment_name: "splade_v22_curriculum"
+
+# Curriculum Learning Configuration
+enable_curriculum: true
+
+curriculum_phases:
+  # Phase 1: Focus on single-term pairs
+  # Higher temperature = softer negative sampling
+  - start_epoch: 1
+    end_epoch: 10
+    temperature: 0.07
+    lambda_infonce: 1.0
+    lr_multiplier: 1.0
+    data_weights:
+      single_term: 0.5
+      multi_term: 0.3
+      original: 0.2
+    description: "Phase 1: Focus on single-term synonym learning"
+
+  # Phase 2: Balanced training
+  # Medium temperature
+  - start_epoch: 11
+    end_epoch: 20
+    temperature: 0.05
+    lambda_infonce: 1.5
+    lr_multiplier: 0.5
+    data_weights:
+      single_term: 0.33
+      multi_term: 0.33
+      hard_neg: 0.34
+    description: "Phase 2: Balanced multi-type training"
+
+  # Phase 3: Hard negative focus
+  # Lower temperature = sharper contrastive learning
+  - start_epoch: 21
+    end_epoch: 30
+    temperature: 0.03
+    lambda_infonce: 2.0
+    lr_multiplier: 0.25
+    data_weights:
+      hard_neg: 0.5
+      multi_term: 0.3
+      single_term: 0.2
+    description: "Phase 3: Hard negative refinement"
+
+# General Settings
+device: "cuda"
+seed: 42
+
+# Notes:
+# - Temperature annealing: 0.07 -> 0.05 -> 0.03
+# - Learning rate decays: 1.0x -> 0.5x -> 0.25x
+# - InfoNCE weight increases: 1.0 -> 1.5 -> 2.0
+# - Data focus shifts from single-term to hard negatives

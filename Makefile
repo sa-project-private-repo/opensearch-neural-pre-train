@@ -1,7 +1,8 @@
 # Makefile for SPLADE-doc Training on DGX Spark (ARM + GB10)
 # Optimized for Nvidia DGX Spark with GB10 GPU and ARM64 architecture
 
-.PHONY: help setup test prepare-baseline train-baseline train-pretrain train-finetune clean clean-outputs monitor logs
+.PHONY: help setup test prepare-baseline train-baseline train-pretrain train-finetune clean clean-outputs monitor logs \
+	train-v22 train-v22-bg train-v22-resume logs-v22 tensorboard-v22
 
 # Default target
 .DEFAULT_GOAL := help
@@ -15,11 +16,13 @@ PIP := $(VENV)/bin/pip
 CONFIG_BASELINE := configs/baseline_dgx.yaml
 CONFIG_PRETRAIN := configs/pretrain_korean_dgx.yaml
 CONFIG_FINETUNE := configs/finetune_msmarco.yaml
+CONFIG_V22 := configs/train_v22.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
 OUTPUT_PRETRAIN := outputs/pretrain_korean_dgx
 OUTPUT_FINETUNE := outputs/finetune_msmarco
+OUTPUT_V22 := outputs/train_v22
 
 # Colors for output
 BLUE := \033[0;34m
@@ -108,6 +111,58 @@ train-finetune: ## Fine-tune on MS MARCO
 	@echo "Batch size: 8 (effective: 64 with gradient accumulation)"
 	@echo "$(BLUE)========================================$(NC)"
 	@$(PYTHON) train.py --config $(CONFIG_FINETUNE)
+
+##@ V22 Curriculum Training
+
+train-v22: ## V22 curriculum training (30 epochs, 3 phases)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V22 Curriculum Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V22)"
+	@echo "Output: $(OUTPUT_V22)"
+	@echo ""
+	@echo "$(YELLOW)Curriculum Phases:$(NC)"
+	@echo "  Phase 1 (1-10):  Single-term focus, temp=0.07"
+	@echo "  Phase 2 (11-20): Balanced training, temp=0.05"
+	@echo "  Phase 3 (21-30): Hard negatives, temp=0.03"
+	@echo ""
+	@echo "$(YELLOW)Loss Components:$(NC)"
+	@echo "  InfoNCE + Self + Positive + Margin + FLOPS + MinAct"
+	@echo ""
+	@echo "Mixed precision: BF16"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) -m src.train v22 --config $(CONFIG_V22)
+
+train-v22-bg: ## V22 training in background (nohup)
+	@echo "$(BLUE)Starting V22 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V22)
+	@nohup $(PYTHON) -m src.train v22 --config $(CONFIG_V22) > $(OUTPUT_V22)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@echo "PID: $$(pgrep -f 'src.train v22' | tail -1)"
+	@echo "Log: $(OUTPUT_V22)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v22"
+	@echo "  make tensorboard-v22"
+
+train-v22-resume: ## Resume V22 training from checkpoint
+	@echo "$(BLUE)Resuming V22 training from checkpoint...$(NC)"
+	@$(PYTHON) -m src.train v22 --config $(CONFIG_V22) --resume
+
+logs-v22: ## Show V22 training logs (real-time)
+	@echo "$(BLUE)V22 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V22)/training.log ]; then \
+		tail -f $(OUTPUT_V22)/training.log; \
+	elif [ -f $(OUTPUT_V22)/nohup.out ]; then \
+		tail -f $(OUTPUT_V22)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v22$(NC)"; \
+	fi
+
+tensorboard-v22: ## Start TensorBoard for V22 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V22)/tensorboard --port 6006
 
 ##@ Monitoring
 

@@ -1,0 +1,14 @@
+"""Core training module for SPLADE."""
+
+from src.train.core.trainer import SPLADETrainer
+from src.train.core.checkpoint import CheckpointManager
+from src.train.core.hooks import TrainingHook, LoggingHook, CheckpointHook, CurriculumHook
+
+__all__ = [
+    "SPLADETrainer",
+    "CheckpointManager",
+    "TrainingHook",
+    "LoggingHook",
+    "CheckpointHook",
+    "CurriculumHook",
+]

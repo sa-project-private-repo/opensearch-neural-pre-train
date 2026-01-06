@@ -142,30 +142,22 @@ class NeuralSparseSearcher(BaseSearcher):
         self.encoder = encoder
 
     def search(self, query: str) -> SearchResponse:
-        """Search using neural sparse vectors."""
-        # Encode query
-        query_sparse = self.encoder.encode_for_query(query, top_k=100)
+        """Search using neural sparse vectors with native neural_sparse query."""
+        # Encode query (top_k=64 for good coverage)
+        query_sparse = self.encoder.encode_for_query(query, top_k=64)
 
         if not query_sparse:
             # Empty query, return empty results
             return SearchResponse(results=[], latency_ms=0, total_hits=0)
 
-        # Build bool query with rank_feature clauses
-        should_clauses = []
-        for token, weight in query_sparse.items():
-            should_clauses.append({
-                "rank_feature": {
-                    "field": f"sparse_embedding.{token}",
-                    "boost": weight,
-                }
-            })
-
+        # Use OpenSearch native neural_sparse query with pre-encoded tokens
         body = {
             "size": self.top_k,
             "query": {
-                "bool": {
-                    "should": should_clauses,
-                    "minimum_should_match": 1,
+                "neural_sparse": {
+                    "sparse_embedding": {
+                        "query_tokens": query_sparse,
+                    }
                 }
             },
         }

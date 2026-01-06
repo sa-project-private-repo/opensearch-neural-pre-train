@@ -61,8 +61,8 @@ class IndexManager:
                         }
                     }
                 },
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
+                "number_of_shards": 6,
+                "number_of_replicas": 2,
             },
             "mappings": {
                 "properties": {
@@ -88,8 +88,8 @@ class IndexManager:
         body = {
             "settings": {
                 "index": {"knn": True},
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
+                "number_of_shards": 6,
+                "number_of_replicas": 2,
             },
             "mappings": {
                 "properties": {
@@ -116,7 +116,7 @@ class IndexManager:
         logger.info(f"Created index: {index_name}")
 
     def create_sparse_index(self) -> None:
-        """Create sparse vector index with rank_features."""
+        """Create sparse vector index with rank_features for neural sparse search."""
         index_name = self.config.sparse_index
         if self.client.indices.exists(index=index_name):
             logger.info(f"Index {index_name} already exists, skipping creation")
@@ -124,8 +124,8 @@ class IndexManager:
 
         body = {
             "settings": {
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
+                "number_of_shards": 6,
+                "number_of_replicas": 2,
             },
             "mappings": {
                 "properties": {
@@ -138,6 +138,9 @@ class IndexManager:
 
         self.client.indices.create(index=index_name, body=body)
         logger.info(f"Created index: {index_name}")
+
+        # Apply two-phase search pipeline for faster neural sparse queries
+        self._create_and_apply_two_phase_pipeline(index_name)
 
     def create_hybrid_index(self) -> None:
         """Create hybrid index with both text and dense vector."""
@@ -157,8 +160,8 @@ class IndexManager:
                         }
                     }
                 },
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
+                "number_of_shards": 6,
+                "number_of_replicas": 2,
             },
             "mappings": {
                 "properties": {
@@ -186,6 +189,49 @@ class IndexManager:
 
         self.client.indices.create(index=index_name, body=body)
         logger.info(f"Created index: {index_name}")
+
+    def _create_and_apply_two_phase_pipeline(self, index_name: str) -> None:
+        """Create and apply two-phase search pipeline for neural sparse optimization."""
+        pipeline_id = "neural_sparse_two_phase"
+
+        # Create two-phase search pipeline
+        pipeline_body = {
+            "request_processors": [
+                {
+                    "neural_sparse_two_phase_processor": {
+                        "tag": "neural-sparse-two-phase",
+                        "description": "Two-phase search for neural sparse queries",
+                        "enabled": True,
+                        "two_phase_parameter": {
+                            "prune_ratio": 0.4,
+                            "expansion_rate": 5,
+                            "max_window_size": 10000,
+                        },
+                    }
+                }
+            ]
+        }
+
+        try:
+            # Create or update the pipeline
+            self.client.transport.perform_request(
+                "PUT",
+                f"/_search/pipeline/{pipeline_id}",
+                body=pipeline_body,
+            )
+            logger.info(f"Created search pipeline: {pipeline_id}")
+
+            # Apply pipeline to index
+            self.client.indices.put_settings(
+                index=index_name,
+                body={"index.search.default_pipeline": pipeline_id},
+            )
+            logger.info(f"Applied {pipeline_id} to index: {index_name}")
+        except Exception as e:
+            logger.warning(
+                f"Could not create/apply two-phase pipeline: {e}. "
+                "Continuing without pipeline optimization."
+            )
 
     def create_all_indices(self) -> None:
         """Create all benchmark indices."""
