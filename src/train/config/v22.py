@@ -31,6 +31,9 @@ class CurriculumPhase:
     lr_multiplier: float = 1.0
     """Learning rate multiplier for this phase."""
 
+    lambda_kd: Optional[float] = None
+    """Knowledge distillation loss weight for this phase (v24+)."""
+
     data_weights: Optional[dict] = None
     """Weights for different data types (e.g., {'single_term': 0.5})."""
 

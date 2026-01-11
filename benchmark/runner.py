@@ -26,6 +26,7 @@ from benchmark.metrics import (
 )
 from benchmark.report import generate_report
 from benchmark.searchers import BaseSearcher, create_searchers
+from benchmark.hybrid_searcher import create_hybrid_searchers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,17 +82,44 @@ class BenchmarkRunner:
         )
         logger.info(f"Indexed documents: {counts}")
 
-    def run_benchmark(self, parallel: bool = False) -> None:
-        """Run benchmark for all search methods."""
+    def run_benchmark(
+        self,
+        parallel: bool = False,
+        include_hybrid: bool = False,
+        methods: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Run benchmark for all search methods.
+
+        Args:
+            parallel: Run methods in parallel
+            include_hybrid: Include hybrid Sparse+Dense fusion methods
+            methods: Specific methods to run (None = all available)
+        """
         logger.info("=== BENCHMARK PHASE ===")
 
-        # Create searchers
+        # Create base searchers
         searchers = create_searchers(
             client=self.index_manager.client,
             config=self.config,
             dense_encoder=self.dense_encoder,
             sparse_encoder=self.sparse_encoder,
         )
+
+        # Add hybrid searchers if requested
+        if include_hybrid:
+            logger.info("Adding hybrid Sparse+Semantic searchers...")
+            hybrid_searchers = create_hybrid_searchers(
+                client=self.index_manager.client,
+                config=self.config,
+                dense_encoder=self.dense_encoder,
+                sparse_encoder=self.sparse_encoder,
+            )
+            searchers.update(hybrid_searchers)
+
+        # Filter by requested methods if specified
+        if methods:
+            searchers = {k: v for k, v in searchers.items() if k in methods}
 
         # Prepare queries
         queries = self.data.queries
@@ -311,6 +339,33 @@ class BenchmarkRunner:
         metrics_path.write_text(json.dumps(metrics_dict, indent=2))
         logger.info(f"Metrics saved to {metrics_path}")
 
+    def save_benchmark_data(self, output_dir: Path) -> None:
+        """Save benchmark data mapping for skip-setup mode."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        data_path = output_dir / "benchmark_data.json"
+        data_dict = {
+            "queries": self.data.queries,
+            "query_positive_ids": self.data.query_positive_ids,
+            "doc_ids": self.data.doc_ids,
+            "sample_size": self.config.sample_size,
+        }
+        data_path.write_text(json.dumps(data_dict, indent=2, ensure_ascii=False))
+        logger.info(f"Benchmark data saved to {data_path}")
+
+    def load_benchmark_data_from_file(self, data_path: Path) -> BenchmarkData:
+        """Load benchmark data from saved file."""
+        data_dict = json.loads(data_path.read_text())
+        logger.info(f"Loaded benchmark data from {data_path}")
+        logger.info(f"  Queries: {len(data_dict['queries'])}")
+        logger.info(f"  Documents: {len(data_dict['doc_ids'])}")
+        # Note: documents content not needed for searching, only doc_ids matter
+        return BenchmarkData(
+            queries=data_dict["queries"],
+            query_positive_ids=data_dict["query_positive_ids"],
+            documents={},  # Not needed for benchmark, only for indexing
+            doc_ids=data_dict["doc_ids"],
+        )
+
     def cleanup(self) -> None:
         """Delete benchmark indices."""
         logger.info("=== CLEANUP ===")
@@ -347,6 +402,18 @@ def main():
         default="outputs/benchmark",
         help="Output directory for results",
     )
+    parser.add_argument(
+        "--include-hybrid",
+        action="store_true",
+        help="Include hybrid Sparse+Semantic fusion methods",
+    )
+    parser.add_argument(
+        "--methods",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Specific methods to run (e.g., bm25 semantic neural_sparse hybrid_rrf)",
+    )
     args = parser.parse_args()
 
     # Create config
@@ -355,24 +422,41 @@ def main():
     # Create runner
     runner = BenchmarkRunner(config)
 
+    # Setup output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    benchmark_data_path = output_dir / "benchmark_data.json"
+
     try:
         # Setup
         if not args.skip_setup:
             runner.run_setup()
+            # Save benchmark data for future skip-setup runs
+            runner.save_benchmark_data(output_dir)
         else:
-            # Still need to load encoders and create searchers
+            # Load from saved benchmark data if available
             logger.info("Loading encoders (skip-setup mode)...")
             runner.index_manager = IndexManager(config)
             runner.dense_encoder, runner.sparse_encoder = create_encoders(config)
-            runner.data = load_benchmark_data(config)
+
+            if benchmark_data_path.exists():
+                logger.info(f"Loading saved benchmark data from {benchmark_data_path}")
+                runner.data = runner.load_benchmark_data_from_file(benchmark_data_path)
+            else:
+                logger.warning(
+                    f"No saved benchmark data found at {benchmark_data_path}. "
+                    "Loading fresh data - doc IDs may not match indexed data!"
+                )
+                runner.data = load_benchmark_data(config)
 
         # Run benchmark
-        runner.run_benchmark(parallel=args.parallel)
+        runner.run_benchmark(
+            parallel=args.parallel,
+            include_hybrid=args.include_hybrid,
+            methods=args.methods,
+        )
 
         # Generate report
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
         report = runner.generate_report(output_dir / "report.md")
         print("\n" + report)
 

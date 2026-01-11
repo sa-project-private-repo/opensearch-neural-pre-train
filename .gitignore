@@ -31,3 +31,9 @@ best_korean_neural_sparse_encoder.pt
 
 # Training data
 data/
+
+# Environment variables (sensitive)
+.env
+!.env_sample
+
+.cache

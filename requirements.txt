@@ -49,6 +49,12 @@ sentence-transformers==3.3.1
 
 # Phase 3: Hard negative mining
 rank-bm25==0.2.2
+FlagEmbedding==1.2.10
+faiss-cpu==1.9.0.post1
+
+# Preprocessing pipeline
+click>=8.1.0
+datasketch>=1.6.0
 
 # Phase 4: Clustering for synonym discovery
 scipy==1.14.1  # For clustering algorithms
@@ -57,6 +63,9 @@ hdbscan==0.8.39  # Advanced clustering (optional)
 # Configuration management
 pyyaml==6.0.2
 mwparserfromhell==0.6.6
+
+# Environment variable management
+python-dotenv>=1.0.0
 
 # LLM inference (ARM aarch64 compatible, Python 3.12)
 # Using FP8 quantization: Transformers 4.46.3+ native support, no external deps

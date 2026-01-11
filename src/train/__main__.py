@@ -2,9 +2,10 @@
 Entry point for `python -m train` command.
 
 Usage:
-    python -m train v22              # Start V22 curriculum training
+    python -m train v22              # Start V22 curriculum training (KoBERT)
+    python -m train v24              # Start V24 XLM-R training (BGE-M3 teacher)
     python -m train v22 --resume     # Resume from checkpoint
-    python -m train v22 --config custom.yaml
+    python -m train v24 --config configs/train_v24.yaml
 """
 
 import sys
@@ -16,7 +17,8 @@ def main() -> int:
         print("Usage: python -m train <command> [options]")
         print()
         print("Commands:")
-        print("  v22       Start V22 curriculum training")
+        print("  v22       Start V22 curriculum training (KoBERT backbone)")
+        print("  v24       Start V24 XLM-R training (BGE-M3 teacher)")
         print("  resume    Resume training from checkpoint")
         print()
         print("Options:")
@@ -26,20 +28,33 @@ def main() -> int:
         return 1
 
     command = sys.argv[1]
+    # Remove command from argv so submodule parsers work correctly
+    sys.argv = [sys.argv[0]] + sys.argv[2:]
 
     if command == "v22":
         from src.train.cli.train_v22 import main as train_v22_main
         return train_v22_main()
+    elif command == "v24":
+        from src.train.cli.train_v24 import main as train_v24_main
+        return train_v24_main()
     elif command == "resume":
         from src.train.cli.resume import main as resume_main
         return resume_main()
     elif command in ("--help", "-h"):
-        print("SPLADE Neural Sparse Training Module v22.0")
+        print("SPLADE Neural Sparse Training Module")
         print()
         print("Usage: python -m train <command> [options]")
         print()
         print("Commands:")
-        print("  v22       Start V22 curriculum training")
+        print("  v22       V22 curriculum training (KoBERT backbone)")
+        print("            - Base model: skt/kobert-base-v1 (50K vocab)")
+        print("            - Teacher: MiniLM-L12-v2")
+        print()
+        print("  v24       V24 XLM-R training (BGE-M3 teacher)")
+        print("            - Base model: xlm-roberta-base (250K vocab)")
+        print("            - Teacher: BAAI/bge-m3")
+        print("            - Knowledge distillation + hard negatives")
+        print()
         print("  resume    Resume training from checkpoint")
         return 0
     else:

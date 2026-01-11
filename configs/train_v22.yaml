@@ -4,6 +4,14 @@
 # Usage:
 #   python -m train v22 --config configs/train_v22.yaml
 #   make train-v22
+#
+# Updated with expert recommendations:
+#   - IDF-aware FLOPS penalty
+#   - Knowledge distillation support
+#   - Fixed triplet margin (1.5 -> 0.3)
+#   - Balanced loss weights
+#   - Increased max_length (64 -> 128)
+#   - Higher learning rate (3e-6 -> 2e-5)
 
 # Model Configuration
 model:
@@ -21,31 +29,39 @@ data:
   val_files:
     - "data/v22.0/val_*.jsonl"
   batch_size: 64
-  max_length: 64
+  max_length: 128             # 64 -> 128: Better context capture
   num_workers: 4
   prefetch_factor: 2
   pin_memory: true
 
-# Loss Configuration (SPLADELossV22)
+# Loss Configuration (SPLADELossV22 / SPLADELossV23)
 loss:
-  # Loss weights
-  lambda_infonce: 2.0      # InfoNCE contrastive loss
-  lambda_self: 4.0         # Self-reconstruction loss
-  lambda_positive: 10.0    # Positive activation loss
-  lambda_margin: 2.5       # Triplet margin loss
-  lambda_flops: 0.005      # FLOPS regularization (5e-3)
-  lambda_min_act: 1.0      # Minimum activation loss
+  # Loss weights (expert recommended)
+  lambda_infonce: 2.5         # 2.0 -> 2.5: Stronger contrastive signal
+  lambda_self: 1.0            # 4.0 -> 1.0: Reduced, was dominating
+  lambda_positive: 3.0        # 10.0 -> 3.0: Reduced, was dominating
+  lambda_margin: 0.0          # 2.5 -> 0.0: Disabled (redundant with InfoNCE)
+  lambda_flops: 0.003         # 0.005 -> 0.003: Allow more activations
+  lambda_min_act: 1.0         # Keep activation floor
+
+  # Knowledge distillation (NEW)
+  lambda_kd: 1.0              # Knowledge distillation weight
+  kd_temperature: 2.0         # KD temperature for soft targets
 
   # Loss hyperparameters
-  temperature: 0.07        # Initial temperature (will be annealed)
-  margin: 1.5              # Triplet margin
-  top_k: 5                 # Top-k for minimum activation
-  min_activation: 0.5      # Minimum activation threshold
+  temperature: 0.08           # 0.07 -> 0.08: Slightly softer contrast
+  margin: 0.3                 # 1.5 -> 0.3: Fixed (1.5 impossible for cosine)
+  top_k: 5                    # Top-k for minimum activation
+  min_activation: 0.5         # Minimum activation threshold
+
+  # IDF-aware FLOPS (NEW)
+  use_idf_weighting: true     # Enable IDF-aware penalty
+  idf_alpha: 2.0              # IDF exponential decay factor
 
 # Training Configuration
 training:
-  num_epochs: 30
-  learning_rate: 0.000003  # 3e-6
+  num_epochs: 20              # 30 -> 20: Faster convergence with better config
+  learning_rate: 0.00002      # 3e-6 -> 2e-5: Higher LR for faster learning
   weight_decay: 0.01
   warmup_ratio: 0.1
   gradient_clip: 1.0
@@ -67,29 +83,38 @@ training:
   output_dir: "outputs/train_v22"
   experiment_name: "splade_v22_curriculum"
 
+# Knowledge Distillation Configuration (NEW)
+knowledge_distillation:
+  enabled: true
+  teacher_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  warmup_epochs: 2            # Start KD after warmup
+
 # Curriculum Learning Configuration
 enable_curriculum: true
 
 curriculum_phases:
-  # Phase 1: Focus on single-term pairs
+  # Phase 1: Foundation learning (7 epochs)
   # Higher temperature = softer negative sampling
+  # Strong KD guidance
   - start_epoch: 1
-    end_epoch: 10
-    temperature: 0.07
-    lambda_infonce: 1.0
+    end_epoch: 7
+    temperature: 0.08
+    lambda_infonce: 2.0
+    lambda_kd: 1.5            # Strong teacher guidance
     lr_multiplier: 1.0
     data_weights:
       single_term: 0.5
       multi_term: 0.3
       original: 0.2
-    description: "Phase 1: Focus on single-term synonym learning"
+    description: "Phase 1: Foundation with teacher guidance"
 
-  # Phase 2: Balanced training
-  # Medium temperature
-  - start_epoch: 11
-    end_epoch: 20
+  # Phase 2: Balanced training (7 epochs)
+  # Medium temperature, balanced KD
+  - start_epoch: 8
+    end_epoch: 14
     temperature: 0.05
-    lambda_infonce: 1.5
+    lambda_infonce: 2.5
+    lambda_kd: 1.0            # Balanced teacher guidance
     lr_multiplier: 0.5
     data_weights:
       single_term: 0.33
@@ -97,12 +122,14 @@ curriculum_phases:
       hard_neg: 0.34
     description: "Phase 2: Balanced multi-type training"
 
-  # Phase 3: Hard negative focus
+  # Phase 3: Refinement (6 epochs)
   # Lower temperature = sharper contrastive learning
-  - start_epoch: 21
-    end_epoch: 30
-    temperature: 0.03
-    lambda_infonce: 2.0
+  # Reduced KD for student independence
+  - start_epoch: 15
+    end_epoch: 20
+    temperature: 0.04         # 0.03 -> 0.04: Not too sharp
+    lambda_infonce: 2.5
+    lambda_kd: 0.5            # Reduced teacher guidance
     lr_multiplier: 0.25
     data_weights:
       hard_neg: 0.5
@@ -115,7 +142,16 @@ device: "cuda"
 seed: 42
 
 # Notes:
-# - Temperature annealing: 0.07 -> 0.05 -> 0.03
+# - Temperature annealing: 0.08 -> 0.05 -> 0.04 (cosine schedule)
 # - Learning rate decays: 1.0x -> 0.5x -> 0.25x
-# - InfoNCE weight increases: 1.0 -> 1.5 -> 2.0
+# - InfoNCE weight: 2.0 -> 2.5 -> 2.5
+# - KD weight decreases: 1.5 -> 1.0 -> 0.5 (student becomes independent)
 # - Data focus shifts from single-term to hard negatives
+#
+# Key changes from original:
+# - Fixed impossible margin (1.5 -> 0.3 for cosine similarity)
+# - Added IDF-aware FLOPS penalty (preserves informative tokens)
+# - Added knowledge distillation (dense teacher guidance)
+# - Balanced loss weights (lambda_positive: 10->3, lambda_self: 4->1)
+# - Increased max_length (64->128) for better context
+# - Higher learning rate (3e-6 -> 2e-5) for faster convergence
