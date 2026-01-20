@@ -1,8 +1,19 @@
 {
     "mcpServers": {
+      "memory": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"],
+        "description": "Persistent memory across sessions"
+      },
+      "sequential-thinking": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "description": "Chain-of-thought reasoning"
+      },
       "context7": {
         "command": "npx",
-        "args": ["-y", "@upstash/context7-mcp@latest"]
+        "args": ["-y", "@context7/mcp-server"],
+        "description": "Live documentation lookup"
       },
       "awslabs.terraform-mcp-server": {
         "command": "uvx",
