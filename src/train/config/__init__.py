@@ -16,6 +16,11 @@ from src.train.config.v24 import (
     V24LossConfig,
     V24ModelConfig,
 )
+from src.train.config.v25 import (
+    V25Config,
+    V25LossConfig,
+    create_default_v25_config,
+)
 
 __all__ = [
     # Base configs
@@ -33,6 +38,10 @@ __all__ = [
     "V24LossConfig",
     "KDConfig",
     "HardNegativeConfig",
+    # V25
+    "V25Config",
+    "V25LossConfig",
+    "create_default_v25_config",
     # Utils
     "load_config",
     "save_config",

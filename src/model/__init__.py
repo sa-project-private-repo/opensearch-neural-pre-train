@@ -26,6 +26,7 @@ from src.model.losses import (
     KnowledgeDistillationLoss,
     DenseTeacherScorer,
     SPLADELossV23,
+    SPLADELossV25,
 )
 
 __all__ = [
@@ -59,4 +60,6 @@ __all__ = [
     "KnowledgeDistillationLoss",
     "DenseTeacherScorer",
     "SPLADELossV23",
+    # V25 IDF-Aware Loss
+    "SPLADELossV25",
 ]

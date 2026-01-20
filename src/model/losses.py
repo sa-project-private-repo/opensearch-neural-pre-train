@@ -569,7 +569,8 @@ class IDFAwareFLOPSLoss(nn.Module):
         weighted_l1 = (self.penalty_weights * mean_activation.abs()).sum()
 
         # Weighted L2 penalty (smooth gradients)
-        weighted_l2 = ((self.penalty_weights * mean_activation) ** 2).sum()
+        # Formula: Σ(w_j * mean_act_j²) - weight applied to squared activation
+        weighted_l2 = (self.penalty_weights * (mean_activation ** 2)).sum()
 
         # Hybrid loss
         loss = weighted_l1 + self.beta * weighted_l2
@@ -1031,3 +1032,306 @@ class SPLADELossV23(nn.Module):
     def update_idf_weights(self, idf_weights: torch.Tensor):
         """Update IDF weights for FLOPS loss."""
         self.flops_loss.update_idf_weights(idf_weights)
+
+
+class SPLADELossV25(nn.Module):
+    """
+    SPLADE loss v25 with mandatory IDF-aware FLOPS and stopword masking.
+
+    Key differences from v23/v24:
+    - IDF weights are REQUIRED (not optional)
+    - Stopword mask support for hard masking of grammatical tokens
+    - Semantic token ratio logging for training monitoring
+
+    This ensures proper frequency-based discrimination for large
+    vocabularies (250K XLM-RoBERTa) where Korean particles and
+    common words would otherwise dominate sparse representations.
+    """
+
+    def __init__(
+        self,
+        idf_weights: torch.Tensor,
+        # Loss weights
+        lambda_infonce: float = 3.0,
+        lambda_self: float = 0.5,
+        lambda_positive: float = 2.0,
+        lambda_margin: float = 0.0,
+        lambda_flops: float = 0.002,
+        lambda_min_act: float = 1.0,
+        lambda_kd: float = 2.0,
+        # Hyperparameters
+        temperature: float = 0.07,
+        margin: float = 0.3,
+        top_k: int = 5,
+        min_activation: float = 0.5,
+        kd_temperature: float = 3.0,
+        # IDF configuration
+        idf_alpha: float = 2.5,
+        # Stopword masking
+        stopword_mask: Optional[torch.Tensor] = None,
+        stopword_penalty: float = 5.0,
+        # Teacher model
+        teacher_model: Optional[DenseTeacherScorer] = None,
+    ):
+        """
+        Initialize SPLADE v25 loss with mandatory IDF weights.
+
+        Args:
+            idf_weights: Pre-computed IDF weights [vocab_size] - REQUIRED
+            lambda_*: Loss component weights
+            temperature: InfoNCE temperature
+            margin: Triplet margin
+            top_k: Top-k for minimum activation
+            min_activation: Minimum activation threshold
+            kd_temperature: Knowledge distillation temperature
+            idf_alpha: IDF exponential scaling factor
+            stopword_mask: Binary mask for stopwords (1=keep, 0=mask)
+            stopword_penalty: Extra penalty multiplier for stopwords in FLOPS
+            teacher_model: Dense teacher for knowledge distillation
+
+        Raises:
+            ValueError: If idf_weights is None
+        """
+        super().__init__()
+
+        if idf_weights is None:
+            raise ValueError(
+                "SPLADELossV25 requires idf_weights. "
+                "Use load_or_compute_idf() to compute from corpus."
+            )
+
+        vocab_size = idf_weights.shape[0]
+
+        # Loss weights
+        self.lambda_infonce = lambda_infonce
+        self.lambda_self = lambda_self
+        self.lambda_positive = lambda_positive
+        self.lambda_margin = lambda_margin
+        self.lambda_flops = lambda_flops
+        self.lambda_min_act = lambda_min_act
+        self.lambda_kd = lambda_kd
+
+        # Store stopword mask
+        if stopword_mask is not None:
+            self.register_buffer("stopword_mask", stopword_mask)
+        else:
+            self.stopword_mask = None
+
+        # Individual loss modules
+        self.infonce_loss = InfoNCELoss(temperature=temperature)
+        self.self_loss = SelfReconstructionLoss()
+        self.positive_loss = PositiveActivationLoss()
+        self.margin_loss = TripletMarginLoss(margin=margin)
+
+        # IDF-aware FLOPS loss (create first with original IDF)
+        self.flops_loss = IDFAwareFLOPSLoss(
+            vocab_size=vocab_size,
+            idf_weights=idf_weights,
+            alpha=idf_alpha,
+        )
+
+        # Apply stopword penalty AFTER penalty_weights are computed
+        # This multiplies penalty for stopword positions (higher penalty)
+        if stopword_mask is not None:
+            self._apply_stopword_penalty_to_flops(stopword_mask, stopword_penalty)
+
+        self.min_act_loss = MinimumActivationLoss(
+            top_k=top_k,
+            min_activation=min_activation,
+        )
+        self.kd_loss = KnowledgeDistillationLoss(temperature=kd_temperature)
+
+        # Teacher model
+        self.teacher_model = teacher_model
+
+        # Tracking for logging
+        self._semantic_ratio_sum = 0.0
+        self._semantic_ratio_count = 0
+
+    def _apply_stopword_penalty_to_flops(
+        self,
+        stopword_mask: torch.Tensor,
+        stopword_penalty: float,
+    ) -> None:
+        """
+        Apply extra penalty to stopword positions in FLOPS loss.
+
+        Multiplies penalty_weights for stopword positions AFTER IDF
+        normalization, avoiding issues with pre-normalization modification.
+
+        Args:
+            stopword_mask: Binary mask (1=keep, 0=stopword)
+            stopword_penalty: Penalty multiplier (>1 increases penalty)
+        """
+        # Get current penalty weights from FLOPS loss
+        penalty_weights = self.flops_loss.penalty_weights.clone()
+
+        # Stopword positions (mask=0) get multiplied penalty
+        stopword_indices = (stopword_mask == 0)
+        penalty_weights[stopword_indices] = penalty_weights[stopword_indices] * stopword_penalty
+
+        # Update the buffer
+        self.flops_loss.register_buffer("penalty_weights", penalty_weights)
+
+    def forward(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        anchor_input_ids: torch.Tensor,
+        anchor_attention_mask: torch.Tensor,
+        positive_input_ids: torch.Tensor,
+        positive_attention_mask: torch.Tensor,
+        anchor_texts: Optional[list] = None,
+        positive_texts: Optional[list] = None,
+        teacher_scores: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Compute combined loss with IDF-aware regularization.
+
+        Args:
+            anchor_repr: Anchor sparse representations [batch_size, vocab_size]
+            positive_repr: Positive sparse representations [batch_size, vocab_size]
+            negative_repr: Negative sparse representations [batch_size, vocab_size]
+            anchor_input_ids: Anchor token IDs [batch_size, seq_len]
+            anchor_attention_mask: Anchor attention mask [batch_size, seq_len]
+            positive_input_ids: Positive token IDs [batch_size, seq_len]
+            positive_attention_mask: Positive attention mask [batch_size, seq_len]
+            anchor_texts: Raw anchor texts for teacher scoring
+            positive_texts: Raw positive texts for teacher scoring
+            teacher_scores: Pre-computed teacher scores
+
+        Returns:
+            total_loss: Combined loss value
+            loss_dict: Dictionary with individual loss components
+        """
+        # Apply stopword mask to representations if available
+        masked_anchor = anchor_repr
+        if self.stopword_mask is not None:
+            masked_anchor = anchor_repr * self.stopword_mask
+
+        # Compute individual losses
+        loss_infonce = self.infonce_loss(masked_anchor, positive_repr, negative_repr)
+
+        loss_self = self.self_loss(
+            anchor_repr, anchor_input_ids, anchor_attention_mask
+        )
+
+        loss_positive = self.positive_loss(
+            anchor_repr, positive_input_ids, positive_attention_mask
+        )
+
+        loss_margin = self.margin_loss(anchor_repr, positive_repr, negative_repr)
+
+        # IDF-aware FLOPS on unmasked repr (penalty handles stopwords)
+        loss_flops = self.flops_loss(anchor_repr)
+
+        loss_min_act = self.min_act_loss(masked_anchor)
+
+        # Knowledge distillation
+        loss_kd = torch.tensor(0.0, device=anchor_repr.device)
+        if self.lambda_kd > 0 and (teacher_scores is not None or self.teacher_model):
+            anchor_norm = F.normalize(masked_anchor, p=2, dim=-1)
+            positive_norm = F.normalize(positive_repr, p=2, dim=-1)
+            student_scores = torch.mm(anchor_norm, positive_norm.t())
+
+            if teacher_scores is None and self.teacher_model is not None:
+                if anchor_texts is not None and positive_texts is not None:
+                    teacher_scores = self.teacher_model.compute_scores(
+                        anchor_texts, positive_texts
+                    )
+
+            if teacher_scores is not None:
+                loss_kd = self.kd_loss(student_scores, teacher_scores)
+
+        # Combine losses
+        total_loss = (
+            self.lambda_infonce * loss_infonce
+            + self.lambda_self * loss_self
+            + self.lambda_positive * loss_positive
+            + self.lambda_margin * loss_margin
+            + self.lambda_flops * loss_flops
+            + self.lambda_min_act * loss_min_act
+            + self.lambda_kd * loss_kd
+        )
+
+        # Compute semantic ratio for monitoring
+        semantic_ratio = self._compute_semantic_ratio(masked_anchor)
+        self._semantic_ratio_sum += semantic_ratio
+        self._semantic_ratio_count += 1
+
+        # Return loss components for logging
+        loss_dict = {
+            "total": total_loss.item(),
+            "infonce": loss_infonce.item(),
+            "self": loss_self.item(),
+            "positive": loss_positive.item(),
+            "margin": loss_margin.item(),
+            "flops": loss_flops.item(),
+            "min_act": loss_min_act.item(),
+            "kd": loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd,
+            "semantic_ratio": semantic_ratio,
+        }
+
+        return total_loss, loss_dict
+
+    def _compute_semantic_ratio(self, repr: torch.Tensor) -> float:
+        """
+        Compute ratio of semantic to stopword activations.
+
+        Higher ratio = better (semantic tokens dominating).
+
+        Args:
+            repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Ratio of mean semantic activation to mean stopword activation
+        """
+        if self.stopword_mask is None:
+            return 1.0
+
+        mean_activation = repr.mean(dim=0)  # [vocab_size]
+
+        semantic_mask = (self.stopword_mask == 1)
+        stopword_mask = (self.stopword_mask == 0)
+
+        semantic_mean = mean_activation[semantic_mask].mean().item()
+        stopword_mean = mean_activation[stopword_mask].mean().item() + 1e-8
+
+        return semantic_mean / stopword_mean
+
+    def get_average_semantic_ratio(self) -> float:
+        """Get average semantic ratio since last reset."""
+        if self._semantic_ratio_count == 0:
+            return 0.0
+        return self._semantic_ratio_sum / self._semantic_ratio_count
+
+    def reset_metrics(self) -> None:
+        """Reset accumulated metrics."""
+        self._semantic_ratio_sum = 0.0
+        self._semantic_ratio_count = 0
+
+    def update_temperature(self, temperature: float):
+        """Update InfoNCE temperature."""
+        self.infonce_loss.temperature = temperature
+
+    def update_kd_temperature(self, temperature: float):
+        """Update knowledge distillation temperature."""
+        self.kd_loss.update_temperature(temperature)
+
+    def update_weights(
+        self,
+        lambda_infonce: Optional[float] = None,
+        lambda_flops: Optional[float] = None,
+        lambda_min_act: Optional[float] = None,
+        lambda_kd: Optional[float] = None,
+    ):
+        """Update loss weights (for curriculum learning)."""
+        if lambda_infonce is not None:
+            self.lambda_infonce = lambda_infonce
+        if lambda_flops is not None:
+            self.lambda_flops = lambda_flops
+        if lambda_min_act is not None:
+            self.lambda_min_act = lambda_min_act
+        if lambda_kd is not None:
+            self.lambda_kd = lambda_kd
