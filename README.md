@@ -44,6 +44,8 @@ This repository contains training code and benchmarks for Korean neural sparse s
 
 ## Quick Start
 
+> **V25 Training Guide**: 단계별 학습 가이드는 [GUIDE.md](./GUIDE.md)를 참조하세요.
+
 ### Installation
 
 ```bash
@@ -167,6 +169,8 @@ outputs/benchmark/
 ### V25 Training (Recommended)
 
 V25 uses XLM-RoBERTa with IDF-aware FLOPS to suppress grammatical particles and promote semantic tokens.
+
+> 상세 가이드: [GUIDE.md](./GUIDE.md)
 
 ```bash
 # Verify IDF setup first
