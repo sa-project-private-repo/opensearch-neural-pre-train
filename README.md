@@ -6,7 +6,27 @@ Korean SPLADE-doc neural sparse retrieval model for OpenSearch.
 
 This repository contains training code and benchmarks for Korean neural sparse search models. The models enable semantic sparse search with synonym expansion for Korean terms.
 
-### Latest Version: v21.4
+### Latest Version: V25 (XLM-RoBERTa with IDF-Aware FLOPS)
+
+| Property | Value |
+|----------|-------|
+| Base Model | `xlm-roberta-base` |
+| Parameters | 278M |
+| Vocabulary | 250,002 tokens |
+| Max Length | 512 |
+| Teacher | BAAI/bge-m3 |
+
+**Key Features (V25):**
+- IDF-Aware FLOPS: BM25-style IDF weighting (mandatory)
+- Korean Stopword Masking: 163 particles/endings penalized
+- Knowledge Distillation: BGE-M3 dense embeddings
+- Semantic Token Ratio Monitoring: Tracks semantic vs stopword activation
+
+**Target Metrics:**
+- Semantic tokens in top-10: 80%+ (vs V24's 30%)
+- Stopword activation: <0.5 (vs V24's 5.8)
+
+### Previous Version: v21.4
 
 | Property | Value |
 |----------|-------|
@@ -14,17 +34,11 @@ This repository contains training code and benchmarks for Korean neural sparse s
 | Parameters | 149M |
 | Vocabulary | 49,999 tokens |
 | Max Length | 64 |
-| HuggingFace | [korean-neural-sparse-encoder-v1](https://huggingface.co/sewoong/korean-neural-sparse-encoder-v1) |
 
-**Key Improvements:**
+**Key Improvements (v21.4):**
 - Curriculum Learning: 3-phase training (single-terms -> balanced -> full)
 - Dynamic Lambda Self: 8.0 for single-term, 4.0 for sentences
 - Minimum Activation Loss: Ensures meaningful top-k activations
-- Enhanced Training Data: Explicit single-term synonym pairs
-
-**Performance:**
-- Recall@1: 99.8%
-- MRR: 0.9990
 
 ---
 
@@ -150,7 +164,43 @@ outputs/benchmark/
 
 ## Training Pipeline
 
-### v21.4 Training
+### V25 Training (Recommended)
+
+V25 uses XLM-RoBERTa with IDF-aware FLOPS to suppress grammatical particles and promote semantic tokens.
+
+```bash
+# Verify IDF setup first
+make train-v25-verify
+
+# Start training
+make train-v25
+
+# Or run in background
+make train-v25-bg
+
+# Monitor training
+make logs-v25
+make tensorboard-v25
+
+# Resume from checkpoint
+make train-v25-resume
+```
+
+**V25 Loss Function:**
+```
+L_total = λ_infonce * L_infonce      # Contrastive learning
+        + λ_self * L_self            # Self-reconstruction
+        + λ_positive * L_positive    # Positive alignment
+        + λ_flops * L_idf_flops      # IDF-weighted sparsity (NEW)
+        + λ_min_act * L_min_act      # Minimum activation
+        + λ_kd * L_kd                # Knowledge distillation
+```
+
+**IDF-Aware FLOPS:**
+- High IDF (rare tokens like 서울, 맛있는) → Low penalty
+- Low IDF (common tokens like 을, 는) → High penalty (+ 5x stopword multiplier)
+
+### v21.4 Training (Legacy)
 
 ```bash
 cd notebooks/opensearch-neural-v21.4/
@@ -333,7 +383,9 @@ POST /documents/_search
 
 | Version | Description | Status |
 |---------|-------------|--------|
-| **v21.4** | Curriculum learning, dynamic lambda, min activation | **Latest** |
+| **V25** | XLM-RoBERTa + IDF-aware FLOPS + Korean stopword masking | **Latest** |
+| V24 | XLM-RoBERTa + BGE-M3 teacher (IDF config exists but inactive) | Deprecated |
+| v21.4 | Curriculum learning, dynamic lambda, min activation (KoBERT) | Stable |
 | v19 | Cross-lingual (KO-EN) with XLM-RoBERTa | Legacy |
 
 <details>

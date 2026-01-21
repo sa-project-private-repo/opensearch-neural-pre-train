@@ -2,7 +2,10 @@
 # Optimized for Nvidia DGX Spark with GB10 GPU and ARM64 architecture
 
 .PHONY: help setup test prepare-baseline train-baseline train-pretrain train-finetune clean clean-outputs monitor logs \
-	train-v22 train-v22-bg train-v22-resume logs-v22 tensorboard-v22
+	train-v22 train-v22-bg train-v22-resume logs-v22 tensorboard-v22 \
+	train-v24 train-v24-bg train-v24-resume eval-v24 logs-v24 tensorboard-v24 \
+	prepare-v25-idf prepare-v25-data train-v25 train-v25-bg train-v25-resume train-v25-quick train-v25-verify \
+	eval-v25 eval-v25-sparsity convert-v25-hf logs-v25 tensorboard-v25 v25-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -17,12 +20,22 @@ CONFIG_BASELINE := configs/baseline_dgx.yaml
 CONFIG_PRETRAIN := configs/pretrain_korean_dgx.yaml
 CONFIG_FINETUNE := configs/finetune_msmarco.yaml
 CONFIG_V22 := configs/train_v22.yaml
+CONFIG_V24 := configs/train_v24.yaml
+CONFIG_V25 := configs/train_v25.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
 OUTPUT_PRETRAIN := outputs/pretrain_korean_dgx
 OUTPUT_FINETUNE := outputs/finetune_msmarco
 OUTPUT_V22 := outputs/train_v22
+OUTPUT_V24 := outputs/train_v24
+OUTPUT_V25 := outputs/train_v25
+
+# V25 specific directories
+IDF_WEIGHTS_DIR := outputs/idf_weights
+V25_DATA_DIR := data/v25.0
+V25_CHECKPOINT_DIR := checkpoints/v25.0
+V25_HF_DIR := huggingface/v25
 
 # Colors for output
 BLUE := \033[0;34m
@@ -42,7 +55,7 @@ help: ## Display this help message
 	@echo "$(YELLOW)Arch:$(NC) ARM64"
 	@echo "$(YELLOW)Optimization:$(NC) BF16 mixed precision"
 	@echo ""
-	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make $(BLUE)<target>$(NC)\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  $(BLUE)%-20s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(YELLOW)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make $(BLUE)<target>$(NC)\n"} /^[a-zA-Z0-9_-]+:.*##/ { printf "  $(BLUE)%-20s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(YELLOW)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 ##@ Setup
 
@@ -163,6 +176,216 @@ tensorboard-v22: ## Start TensorBoard for V22 training
 	@echo "$(BLUE)Starting TensorBoard...$(NC)"
 	@echo "URL: http://localhost:6006"
 	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V22)/tensorboard --port 6006
+
+##@ V24 XLM-RoBERTa Training (Baseline)
+
+train-v24: ## V24 XLM-RoBERTa training (25 epochs, BGE-M3 teacher)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V24 XLM-RoBERTa Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V24)"
+	@echo "Output: $(OUTPUT_V24)"
+	@echo ""
+	@echo "$(YELLOW)Key Features:$(NC)"
+	@echo "  - Base model: xlm-roberta-base (250K vocab)"
+	@echo "  - Teacher: BAAI/bge-m3"
+	@echo "  - Standard FLOPS (no IDF weighting)"
+	@echo ""
+	@$(PYTHON) -m src.train v24 --config $(CONFIG_V24)
+
+train-v24-bg: ## V24 training in background
+	@echo "$(BLUE)Starting V24 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V24)
+	@nohup $(PYTHON) -m src.train v24 --config $(CONFIG_V24) > $(OUTPUT_V24)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@echo "PID: $$(pgrep -f 'src.train v24' | tail -1)"
+	@echo "Log: $(OUTPUT_V24)/nohup.out"
+
+train-v24-resume: ## Resume V24 training from checkpoint
+	@echo "$(BLUE)Resuming V24 training...$(NC)"
+	@$(PYTHON) -m src.train v24 --config $(CONFIG_V24) --resume
+
+eval-v24: ## Evaluate V24 model on validation set
+	@echo "$(BLUE)Evaluating V24 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py --model huggingface/v24_best --num-samples 100
+
+logs-v24: ## Show V24 training logs
+	@if [ -f $(OUTPUT_V24)/training.log ]; then \
+		tail -f $(OUTPUT_V24)/training.log; \
+	elif [ -f $(OUTPUT_V24)/nohup.out ]; then \
+		tail -f $(OUTPUT_V24)/nohup.out; \
+	else \
+		echo "$(RED)No logs found$(NC)"; \
+	fi
+
+tensorboard-v24: ## Start TensorBoard for V24
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V24)/tensorboard --port 6006
+
+##@ V25 IDF-Aware Training Pipeline
+
+prepare-v25-idf: ## Compute IDF weights from training corpus
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Computing IDF Weights for V25$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@mkdir -p $(IDF_WEIGHTS_DIR)
+	@echo "$(YELLOW)Corpus:$(NC) data/v24.0/train_*.jsonl"
+	@echo "$(YELLOW)Output:$(NC) $(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt"
+	@echo ""
+	@$(PYTHON) -c " \
+from src.train.idf import IDFComputer; \
+from transformers import AutoTokenizer; \
+import glob; \
+tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base'); \
+computer = IDFComputer(tokenizer); \
+files = sorted(glob.glob('data/v24.0/train_*.jsonl')); \
+print(f'Loading from {len(files)} files...'); \
+computer.compute_from_training_files(files, sample_size=100000); \
+computer.save('$(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt'); \
+print('Done!'); \
+"
+	@echo "$(GREEN)✓ IDF weights computed$(NC)"
+
+prepare-v25-stopwords: ## Generate Korean stopword mask
+	@echo "$(BLUE)Generating Korean stopword mask...$(NC)"
+	@mkdir -p $(IDF_WEIGHTS_DIR)
+	@$(PYTHON) -c " \
+from src.train.idf import create_stopword_mask, get_korean_stopword_ids; \
+from transformers import AutoTokenizer; \
+import torch; \
+tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base'); \
+stopword_ids = get_korean_stopword_ids(tokenizer); \
+print(f'Found {len(stopword_ids)} Korean stopword tokens'); \
+mask = create_stopword_mask(tokenizer); \
+torch.save(mask, '$(IDF_WEIGHTS_DIR)/xlmr_stopword_mask.pt'); \
+print('Saved to $(IDF_WEIGHTS_DIR)/xlmr_stopword_mask.pt'); \
+"
+	@echo "$(GREEN)✓ Stopword mask generated$(NC)"
+
+prepare-v25-data: prepare-v25-idf prepare-v25-stopwords ## Prepare all V25 data (IDF + stopwords)
+	@echo "$(GREEN)✓ V25 data preparation complete$(NC)"
+
+train-v25: ## V25 IDF-aware FLOPS training (XLM-RoBERTa 250K vocab)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V25 IDF-Aware Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V25)"
+	@echo "Output: $(OUTPUT_V25)"
+	@echo ""
+	@echo "$(YELLOW)Key Features:$(NC)"
+	@echo "  - Base model: xlm-roberta-base (250K vocab)"
+	@echo "  - Teacher: BAAI/bge-m3"
+	@echo "  - IDF-aware FLOPS: BM25 IDF weighting"
+	@echo "  - Stopword masking: Korean particles/endings"
+	@echo ""
+	@echo "$(YELLOW)Loss Components:$(NC)"
+	@echo "  InfoNCE + Self + Positive + IDF-FLOPS + MinAct + KD"
+	@echo ""
+	@echo "Mixed precision: BF16"
+	@echo "$(BLUE)========================================$(NC)"
+	@test -f $(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt || (echo "$(RED)Error: IDF weights not found. Run: make prepare-v25-idf$(NC)" && exit 1)
+	@$(PYTHON) -m src.train v25 --config $(CONFIG_V25)
+
+train-v25-quick: ## Quick V25 training validation (500 samples, 2 epochs)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V25 Quick Training Validation$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Samples: 500"
+	@echo "Epochs: 2"
+	@echo "Purpose: Verify IDF and stopword masking work correctly"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) scripts/quick_train_v25.py --samples 500 --epochs 2
+
+train-v25-bg: ## V25 training in background (nohup)
+	@echo "$(BLUE)Starting V25 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V25)
+	@test -f $(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt || (echo "$(RED)Error: IDF weights not found. Run: make prepare-v25-idf$(NC)" && exit 1)
+	@nohup $(PYTHON) -m src.train v25 --config $(CONFIG_V25) > $(OUTPUT_V25)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'src.train v25' | tail -1)"
+	@echo "Log: $(OUTPUT_V25)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v25"
+	@echo "  make tensorboard-v25"
+
+train-v25-resume: ## Resume V25 training from checkpoint
+	@echo "$(BLUE)Resuming V25 training from checkpoint...$(NC)"
+	@$(PYTHON) -m src.train v25 --config $(CONFIG_V25) --resume
+
+train-v25-verify: ## Verify V25 IDF setup (no training, just validation)
+	@echo "$(BLUE)Verifying V25 IDF setup...$(NC)"
+	@$(PYTHON) scripts/quick_train_v25.py --verify-only
+
+eval-v25: ## Evaluate V25 model on validation set
+	@echo "$(BLUE)Evaluating V25 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V25_HF_DIR)/best \
+		--num-samples 100
+
+eval-v25-sparsity: ## Analyze V25 sparsity (semantic vs stopword tokens)
+	@echo "$(BLUE)V25 Sparsity Analysis...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V25_HF_DIR)/best \
+		--sparsity-only
+
+eval-v25-compare: ## Compare V24 vs V25 models
+	@echo "$(BLUE)Comparing V24 vs V25...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V25_HF_DIR)/best \
+		--compare huggingface/v24_best \
+		--num-samples 100
+
+convert-v25-hf: ## Convert V25 checkpoint to HuggingFace format
+	@echo "$(BLUE)Converting V25 checkpoint to HuggingFace format...$(NC)"
+	@mkdir -p $(V25_HF_DIR)
+	@$(PYTHON) scripts/convert_checkpoint_to_hf.py \
+		--checkpoint $(V25_CHECKPOINT_DIR)/best_model.pt \
+		--output $(V25_HF_DIR)/best \
+		--model-name xlm-roberta-base
+	@echo "$(GREEN)✓ Converted to $(V25_HF_DIR)/best$(NC)"
+
+logs-v25: ## Show V25 training logs (real-time)
+	@echo "$(BLUE)V25 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V25)/training.log ]; then \
+		tail -f $(OUTPUT_V25)/training.log; \
+	elif [ -f $(OUTPUT_V25)/nohup.out ]; then \
+		tail -f $(OUTPUT_V25)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v25$(NC)"; \
+	fi
+
+tensorboard-v25: ## Start TensorBoard for V25 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V25)/tensorboard --port 6006
+
+v25-pipeline: ## Run full V25 pipeline (data -> train -> eval)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V25 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Compute IDF weights"
+	@echo "  2. Generate stopword mask"
+	@echo "  3. Run quick validation (500 samples)"
+	@echo "  4. Full training (if validation passes)"
+	@echo "  5. Evaluation"
+	@echo ""
+	@echo "$(BLUE)[1/5]$(NC) Computing IDF weights..."
+	@$(MAKE) prepare-v25-idf
+	@echo ""
+	@echo "$(BLUE)[2/5]$(NC) Generating stopword mask..."
+	@$(MAKE) prepare-v25-stopwords
+	@echo ""
+	@echo "$(BLUE)[3/5]$(NC) Running quick validation..."
+	@$(MAKE) train-v25-quick
+	@echo ""
+	@echo "$(YELLOW)Quick validation complete.$(NC)"
+	@echo "Review the results above. If semantic tokens are dominant, proceed with:"
+	@echo "  make train-v25-bg"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline steps 1-3 complete$(NC)"
 
 ##@ Monitoring
 
