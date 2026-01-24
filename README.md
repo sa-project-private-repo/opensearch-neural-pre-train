@@ -172,22 +172,72 @@ V25 uses XLM-RoBERTa with IDF-aware FLOPS to suppress grammatical particles and 
 
 > 상세 가이드: [GUIDE.md](./GUIDE.md)
 
+#### Full Training Pipeline
+
 ```bash
-# Verify IDF setup first
+# 1. Data preparation (BGE-M3 hard negatives mining)
+make prepare-v25-data
+
+# 2. IDF weights computation (for FLOPS regularization)
+make prepare-v25-idf
+
+# 3. Verify IDF setup
 make train-v25-verify
 
-# Start training
+# 4. Start training
 make train-v25
 
-# Or run in background
-make train-v25-bg
-
-# Monitor training
-make logs-v25
-make tensorboard-v25
-
-# Resume from checkpoint
+# 5. Resume from checkpoint (if interrupted)
 make train-v25-resume
+```
+
+#### Background Execution
+
+For long-running training on remote servers:
+
+```bash
+# Method 1: nohup (simple)
+nohup make train-v25 > outputs/train_v25/training.log 2>&1 &
+echo $!  # Save PID for later
+
+# Method 2: tmux (recommended)
+tmux new -d -s train 'make train-v25'
+tmux attach -t train    # Attach to session
+# Ctrl+b, d              # Detach from session
+tmux kill-session -t train  # Kill session
+```
+
+#### TensorBoard Monitoring
+
+```bash
+# Start TensorBoard (foreground)
+tensorboard --logdir outputs/train_v25/tensorboard --port 6006 --bind_all
+
+# Start TensorBoard (background)
+nohup tensorboard --logdir outputs/train_v25/tensorboard --port 6006 --bind_all > /tmp/tensorboard.log 2>&1 &
+
+# Or use make target
+make tensorboard-v25
+```
+
+**Remote Access (SSH Tunneling):**
+```bash
+# On local machine
+ssh -L 6006:localhost:6006 ec2-user@<EC2-IP>
+# Then open http://localhost:6006 in browser
+```
+
+#### Training Status Check
+
+```bash
+# View live logs
+make logs-v25
+
+# Or directly
+tail -f outputs/train_v25/training.log
+
+# Check GPU usage
+nvidia-smi -l 1
 ```
 
 **V25 Loss Function:**
