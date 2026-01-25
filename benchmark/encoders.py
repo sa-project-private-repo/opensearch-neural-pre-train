@@ -299,8 +299,11 @@ def create_encoders(config: BenchmarkConfig) -> tuple:
         model_name=config.bge_m3_model,
         device=config.device,
     )
+    # Use max_length from config if available
+    max_length = getattr(config, "neural_sparse_max_length", 64)
     sparse_encoder = NeuralSparseEncoder(
         model_path=config.neural_sparse_path,
         device=config.device,
+        max_length=max_length,
     )
     return dense_encoder, sparse_encoder

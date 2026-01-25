@@ -55,11 +55,19 @@ def load_triplets(
             if max_samples and i >= max_samples:
                 break
             data = json.loads(line)
+            # Support both "anchor" and "query" field names
+            anchor = data.get("anchor") or data.get("query")
+            positive = data.get("positive")
+            negative = data.get("negative")
+            # Skip if missing required fields
+            if not anchor or not positive or not negative:
+                logger.warning(f"Skipping line {i}: missing required field")
+                continue
             triplets.append(
                 Triplet(
-                    anchor=data["anchor"],
-                    positive=data["positive"],
-                    negative=data["negative"],
+                    anchor=anchor,
+                    positive=positive,
+                    negative=negative,
                     difficulty=data.get("difficulty", "unknown"),
                     length_class=data.get("length_class", "unknown"),
                     pair_type=data.get("pair_type", "unknown"),

@@ -18,21 +18,24 @@ class BenchmarkConfig:
     verify_certs: bool = True
 
     # Index names
-    bm25_index: str = "benchmark-bm25-v22"
-    dense_index: str = "benchmark-dense-v22"
-    sparse_index: str = "benchmark-sparse-v22"
-    hybrid_index: str = "benchmark-hybrid-v22"
+    bm25_index: str = "benchmark-bm25-v25"
+    dense_index: str = "benchmark-dense-v25"
+    sparse_index: str = "benchmark-sparse-v25"
+    hybrid_index: str = "benchmark-hybrid-v25"
 
     # Model paths
     bge_m3_model: str = "BAAI/bge-m3"
     neural_sparse_path: Path = field(
-        default_factory=lambda: Path("huggingface/v22.0")
+        default_factory=lambda: Path("huggingface/v25")
     )
 
     # Data paths
     validation_triplets_path: Path = field(
-        default_factory=lambda: Path("data/v22.0/validation_triplets.jsonl")
+        default_factory=lambda: Path("data/v24.0/val.jsonl")
     )
+
+    # Neural sparse settings
+    neural_sparse_max_length: int = 192  # V25 uses 192
 
     # Benchmark settings
     sample_size: int = 2000
