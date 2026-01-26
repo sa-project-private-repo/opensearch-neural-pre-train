@@ -94,10 +94,57 @@ KOREAN_FUNCTION_WORDS = [
     "무엇", "뭐", "어디", "언제", "왜", "어떻게",
 ]
 
+# V26: Additional high-frequency stopwords observed in V25 analysis
+# These verb endings and functional words dominated top activations
+KOREAN_ADDITIONAL_STOPWORDS = [
+    # Declarative verb endings (formal/informal)
+    "있습니다", "합니다", "입니다", "됩니다", "했습니다",
+    "있어요", "해요", "이에요", "되요", "했어요",
+    "있어", "해", "이야", "돼", "했어",
+    # Nominalizing patterns
+    "것입니다", "것이다", "것은", "것을", "것이",
+    "수", "때", "것", "데",
+    # Connective patterns
+    "그런데", "따라서", "그러므로", "그래서", "하지만",
+    "그러나", "그리고", "또한", "또는", "및",
+    # Auxiliary expressions
+    "있는", "하는", "되는", "하게", "되게",
+    "할", "될", "있을", "없을",
+    # Common adverbs that don't carry semantic meaning
+    "더", "가장", "매우", "아주", "잘",
+    "바로", "이미", "아직", "다시", "모두",
+    # Modal/aspectual markers
+    "수있", "수없", "겠", "어야", "어도",
+    # Common predicative endings
+    "한다", "한", "하고", "해서", "하면",
+]
+
 # Combined stopword list
 KOREAN_STOPWORDS: List[str] = (
     KOREAN_PARTICLES + KOREAN_ENDINGS + KOREAN_FUNCTION_WORDS
 )
+
+# V26 Extended stopword list with additional high-frequency terms
+KOREAN_STOPWORDS_V26: List[str] = (
+    KOREAN_PARTICLES + KOREAN_ENDINGS + KOREAN_FUNCTION_WORDS
+    + KOREAN_ADDITIONAL_STOPWORDS
+)
+
+
+def get_special_token_ids_only(tokenizer: PreTrainedTokenizer) -> Set[int]:
+    """
+    Get ONLY special token IDs (not stopwords).
+
+    This is used for V26 to exclude special tokens from IDF normalization
+    without conflating them with linguistic stopwords.
+
+    Args:
+        tokenizer: HuggingFace tokenizer
+
+    Returns:
+        Set of special token IDs
+    """
+    return _get_special_token_ids(tokenizer)
 
 
 def get_korean_stopword_ids(
@@ -239,6 +286,91 @@ def create_stopword_mask(
 
     masked_count = (mask == 0).sum().item()
     logger.info(f"Created stopword mask: {masked_count} tokens masked")
+
+    return mask
+
+
+def get_korean_stopword_ids_v26(
+    tokenizer: PreTrainedTokenizer,
+    include_subwords: bool = True,
+) -> Set[int]:
+    """
+    Get token IDs for V26 extended Korean stopwords.
+
+    Uses the expanded KOREAN_STOPWORDS_V26 list which includes
+    additional high-frequency verb endings and functional words
+    observed in V25 analysis.
+
+    Args:
+        tokenizer: HuggingFace tokenizer (XLM-RoBERTa)
+        include_subwords: Include subword variants (with/without ▁)
+
+    Returns:
+        Set of token IDs for stopwords (NOT including special tokens)
+    """
+    stopword_ids: Set[int] = set()
+
+    for word in KOREAN_STOPWORDS_V26:
+        # Direct encoding
+        tokens = tokenizer.encode(word, add_special_tokens=False)
+        stopword_ids.update(tokens)
+
+        if include_subwords:
+            # Try with leading space (SentencePiece format)
+            space_word = f" {word}"
+            space_tokens = tokenizer.encode(space_word, add_special_tokens=False)
+            stopword_ids.update(space_tokens)
+
+            # Also try to find the word directly in vocabulary
+            sp_word = f"▁{word}"
+            if sp_word in tokenizer.get_vocab():
+                stopword_ids.add(tokenizer.convert_tokens_to_ids(sp_word))
+
+            if word in tokenizer.get_vocab():
+                stopword_ids.add(tokenizer.convert_tokens_to_ids(word))
+
+    logger.info(f"V26: Identified {len(stopword_ids)} stopword token IDs")
+    return stopword_ids
+
+
+def create_stopword_mask_v26(
+    tokenizer: PreTrainedTokenizer,
+    include_subwords: bool = True,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    Create a binary mask for V26 extended stopword tokens.
+
+    Uses the expanded stopword list but does NOT include special tokens
+    in the mask (they are handled separately via special_penalty).
+
+    Returns a tensor where:
+    - 1.0 = regular token (keep)
+    - 0.0 = stopword token (mask)
+
+    Args:
+        tokenizer: HuggingFace tokenizer
+        include_subwords: Include subword variants
+        device: Target device for tensor
+
+    Returns:
+        Binary mask tensor [vocab_size]
+    """
+    vocab_size = tokenizer.vocab_size
+    mask = torch.ones(vocab_size, device=device)
+
+    # Get V26 stopword IDs (without special tokens)
+    stopword_ids = get_korean_stopword_ids_v26(
+        tokenizer,
+        include_subwords=include_subwords,
+    )
+
+    for token_id in stopword_ids:
+        if 0 <= token_id < vocab_size:
+            mask[token_id] = 0.0
+
+    masked_count = (mask == 0).sum().item()
+    logger.info(f"V26: Created stopword mask: {masked_count} tokens masked")
 
     return mask
 

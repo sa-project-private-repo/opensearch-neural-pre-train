@@ -25,7 +25,9 @@ class NSMCDownloader(BaseDownloader):
     def download(self) -> None:
         """Download NSMC from HuggingFace."""
         logger.info(f"Downloading {self.dataset_name}...")
-        self.dataset = load_dataset(self.hf_path, cache_dir=self.cache_dir)
+        self.dataset = load_dataset(
+            self.hf_path, cache_dir=self.cache_dir, trust_remote_code=True
+        )
         logger.info(f"Downloaded {self.get_stats()}")
 
     def iterate(self) -> Iterator[RawSample]:

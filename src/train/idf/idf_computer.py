@@ -276,16 +276,16 @@ def _load_documents_from_jsonl(file_path: Path) -> Iterator[str]:
         for line in f:
             try:
                 data = json.loads(line.strip())
-                # Extract all text fields
-                if "query" in data:
+                # Extract all text fields (skip None/null values)
+                if "query" in data and data["query"]:
                     yield data["query"]
-                if "positive" in data:
+                if "positive" in data and data["positive"]:
                     yield data["positive"]
-                if "negative" in data:
+                if "negative" in data and data["negative"]:
                     yield data["negative"]
-                if "text" in data:
+                if "text" in data and data["text"]:
                     yield data["text"]
-                if "document" in data:
+                if "document" in data and data["document"]:
                     yield data["document"]
             except json.JSONDecodeError:
                 continue

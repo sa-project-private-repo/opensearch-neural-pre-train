@@ -282,8 +282,11 @@ class SPLADETrainer:
             if self._interrupted:
                 break
 
-            # Move batch to device
-            batch = {k: v.to(self.device) for k, v in batch.items()}
+            # Move batch to device (skip non-tensor metadata)
+            batch = {
+                k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
 
             # Notify hooks
             for hook in self.hooks:
@@ -443,7 +446,10 @@ class SPLADETrainer:
         num_batches = 0
 
         for batch in tqdm(self.val_dataloader, desc="Validation", disable=not sys.stdout.isatty()):
-            batch = {k: v.to(self.device) for k, v in batch.items()}
+            batch = {
+                k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
 
             loss, _ = self._train_step(batch)
             total_loss += loss.item()

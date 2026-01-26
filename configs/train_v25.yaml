@@ -36,7 +36,7 @@ data:
     - "data/v24.0/train_*.jsonl"
   val_files:
     - "data/v24.0/val.jsonl"
-  batch_size: 48                 # Same as V24
+  batch_size: 24                 # Reduced for BGE-M3 teacher memory
   max_length: 192                # Same as V24
   num_workers: 4
   prefetch_factor: 2
@@ -80,7 +80,7 @@ training:
   weight_decay: 0.01
   warmup_ratio: 0.1
   gradient_clip: 1.0
-  gradient_accumulation_steps: 2 # Effective batch size = 48 * 2 = 96
+  gradient_accumulation_steps: 4 # Effective batch size = 24 * 4 = 96
 
   # Mixed precision (bf16 for A100/H100)
   mixed_precision: "bf16"

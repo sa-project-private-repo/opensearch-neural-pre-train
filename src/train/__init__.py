@@ -15,18 +15,19 @@ See `python -m train --help` for all options.
 __version__ = "22.0.0"
 __author__ = "Neural Sparse Team"
 
-from src.train.config import V22Config, load_config
-from src.train.core import SPLADETrainer, CheckpointManager
-from src.train.data import SPLADEDataset, DataCollator
-from src.train.utils import setup_logging, TrainingMetrics
+try:
+    from src.train.config import V22Config, load_config
+    from src.train.core import SPLADETrainer, CheckpointManager
+    from src.train.utils import setup_logging, TrainingMetrics
 
-__all__ = [
-    "V22Config",
-    "load_config",
-    "SPLADETrainer",
-    "CheckpointManager",
-    "SPLADEDataset",
-    "DataCollator",
-    "setup_logging",
-    "TrainingMetrics",
-]
+    __all__ = [
+        "V22Config",
+        "load_config",
+        "SPLADETrainer",
+        "CheckpointManager",
+        "setup_logging",
+        "TrainingMetrics",
+    ]
+except ImportError:
+    # Allow partial imports for scripts that only need specific modules
+    __all__ = []

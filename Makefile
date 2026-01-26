@@ -5,7 +5,10 @@
 	train-v22 train-v22-bg train-v22-resume logs-v22 tensorboard-v22 \
 	train-v24 train-v24-bg train-v24-resume eval-v24 logs-v24 tensorboard-v24 \
 	prepare-v25-idf prepare-v25-data train-v25 train-v25-bg train-v25-resume train-v25-quick train-v25-verify \
-	eval-v25 eval-v25-sparsity convert-v25-hf logs-v25 tensorboard-v25 v25-pipeline
+	eval-v25 eval-v25-sparsity convert-v25-hf logs-v25 tensorboard-v25 v25-pipeline \
+	prepare-v26-idf prepare-v26-data train-v26 train-v26-bg train-v26-resume \
+	eval-v26 eval-v26-sparsity convert-v26-hf logs-v26 tensorboard-v26 v26-pipeline \
+	validate-semantic-ratio
 
 # Default target
 .DEFAULT_GOAL := help
@@ -22,6 +25,7 @@ CONFIG_FINETUNE := configs/finetune_msmarco.yaml
 CONFIG_V22 := configs/train_v22.yaml
 CONFIG_V24 := configs/train_v24.yaml
 CONFIG_V25 := configs/train_v25.yaml
+CONFIG_V26 := configs/train_v26.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
@@ -30,12 +34,17 @@ OUTPUT_FINETUNE := outputs/finetune_msmarco
 OUTPUT_V22 := outputs/train_v22
 OUTPUT_V24 := outputs/train_v24
 OUTPUT_V25 := outputs/train_v25
+OUTPUT_V26 := outputs/train_v26
 
 # V25 specific directories
 IDF_WEIGHTS_DIR := outputs/idf_weights
 V25_DATA_DIR := data/v25.0
 V25_CHECKPOINT_DIR := checkpoints/v25.0
 V25_HF_DIR := huggingface/v25
+
+# V26 specific directories
+V26_CHECKPOINT_DIR := checkpoints/v26.0
+V26_HF_DIR := huggingface/v26
 
 # Colors for output
 BLUE := \033[0;34m
@@ -231,34 +240,13 @@ prepare-v25-idf: ## Compute IDF weights from training corpus
 	@echo "$(YELLOW)Corpus:$(NC) data/v24.0/train_*.jsonl"
 	@echo "$(YELLOW)Output:$(NC) $(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt"
 	@echo ""
-	@$(PYTHON) -c " \
-from src.train.idf import IDFComputer; \
-from transformers import AutoTokenizer; \
-import glob; \
-tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base'); \
-computer = IDFComputer(tokenizer); \
-files = sorted(glob.glob('data/v24.0/train_*.jsonl')); \
-print(f'Loading from {len(files)} files...'); \
-computer.compute_from_training_files(files, sample_size=100000); \
-computer.save('$(IDF_WEIGHTS_DIR)/xlmr_v25_idf.pt'); \
-print('Done!'); \
-"
+	@$(PYTHON) scripts/compute_idf_weights.py
 	@echo "$(GREEN)✓ IDF weights computed$(NC)"
 
 prepare-v25-stopwords: ## Generate Korean stopword mask
 	@echo "$(BLUE)Generating Korean stopword mask...$(NC)"
 	@mkdir -p $(IDF_WEIGHTS_DIR)
-	@$(PYTHON) -c " \
-from src.train.idf import create_stopword_mask, get_korean_stopword_ids; \
-from transformers import AutoTokenizer; \
-import torch; \
-tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base'); \
-stopword_ids = get_korean_stopword_ids(tokenizer); \
-print(f'Found {len(stopword_ids)} Korean stopword tokens'); \
-mask = create_stopword_mask(tokenizer); \
-torch.save(mask, '$(IDF_WEIGHTS_DIR)/xlmr_stopword_mask.pt'); \
-print('Saved to $(IDF_WEIGHTS_DIR)/xlmr_stopword_mask.pt'); \
-"
+	@$(PYTHON) scripts/generate_stopword_mask.py
 	@echo "$(GREEN)✓ Stopword mask generated$(NC)"
 
 prepare-v25-data: prepare-v25-idf prepare-v25-stopwords ## Prepare all V25 data (IDF + stopwords)
@@ -386,6 +374,128 @@ v25-pipeline: ## Run full V25 pipeline (data -> train -> eval)
 	@echo "  make train-v25-bg"
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline steps 1-3 complete$(NC)"
+
+##@ V26 Enhanced IDF Training Pipeline
+
+prepare-v26-idf: ## Compute IDF weights for V26 (uses same corpus as V25)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Computing IDF Weights for V26$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@mkdir -p $(IDF_WEIGHTS_DIR)
+	@echo "$(YELLOW)Corpus:$(NC) data/v24.0/train_*.jsonl"
+	@echo "$(YELLOW)Output:$(NC) $(OUTPUT_V26)/idf_weights/xlmr_v26_idf.pt"
+	@echo ""
+	@$(PYTHON) scripts/compute_idf_weights.py --output-dir $(OUTPUT_V26)/idf_weights --output-name xlmr_v26_idf
+	@echo "$(GREEN)✓ IDF weights computed$(NC)"
+
+prepare-v26-data: prepare-v26-idf ## Prepare all V26 data
+	@echo "$(GREEN)✓ V26 data preparation complete$(NC)"
+
+train-v26: ## V26 Enhanced IDF training (XLM-RoBERTa with special token fix)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V26 Enhanced IDF Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V26)"
+	@echo "Output: $(OUTPUT_V26)"
+	@echo ""
+	@echo "$(YELLOW)V26 Key Improvements over V25:$(NC)"
+	@echo "  - Special tokens excluded from IDF normalization"
+	@echo "  - Fixed penalty (100.0) for special tokens"
+	@echo "  - lambda_flops: 0.010 (5x increase)"
+	@echo "  - stopword_penalty: 15.0 (3x increase)"
+	@echo "  - idf_alpha: 4.0 (sharper penalty curve)"
+	@echo "  - Extended Korean stopword list"
+	@echo ""
+	@echo "$(YELLOW)Expected Results:$(NC)"
+	@echo "  - semantic_ratio > 1.0 (semantic tokens dominating)"
+	@echo "  - Top-10 semantic tokens: 80%+"
+	@echo "  - Recall@1 parity with BM25"
+	@echo ""
+	@echo "Mixed precision: BF16"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) -m src.train v26 --config $(CONFIG_V26)
+
+train-v26-bg: ## V26 training in background (nohup)
+	@echo "$(BLUE)Starting V26 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V26)
+	@nohup $(PYTHON) -m src.train v26 --config $(CONFIG_V26) > $(OUTPUT_V26)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'src.train v26' | tail -1)"
+	@echo "Log: $(OUTPUT_V26)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v26"
+	@echo "  make tensorboard-v26"
+
+train-v26-resume: ## Resume V26 training from checkpoint
+	@echo "$(BLUE)Resuming V26 training from checkpoint...$(NC)"
+	@$(PYTHON) -m src.train v26 --config $(CONFIG_V26) --resume
+
+eval-v26: ## Evaluate V26 model on validation set
+	@echo "$(BLUE)Evaluating V26 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V26_HF_DIR)/best \
+		--num-samples 100
+
+eval-v26-sparsity: ## Analyze V26 sparsity (semantic vs stopword tokens)
+	@echo "$(BLUE)V26 Sparsity Analysis...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V26_HF_DIR)/best \
+		--sparsity-only
+
+convert-v26-hf: ## Convert V26 checkpoint to HuggingFace format
+	@echo "$(BLUE)Converting V26 checkpoint to HuggingFace format...$(NC)"
+	@mkdir -p $(V26_HF_DIR)
+	@$(PYTHON) scripts/export_v25_to_huggingface.py \
+		--checkpoint $(OUTPUT_V26)/best_model \
+		--output $(V26_HF_DIR)
+	@echo "$(GREEN)✓ Converted to $(V26_HF_DIR)$(NC)"
+
+logs-v26: ## Show V26 training logs (real-time)
+	@echo "$(BLUE)V26 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V26)/training.log ]; then \
+		tail -f $(OUTPUT_V26)/training.log; \
+	elif [ -f $(OUTPUT_V26)/nohup.out ]; then \
+		tail -f $(OUTPUT_V26)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v26$(NC)"; \
+	fi
+
+tensorboard-v26: ## Start TensorBoard for V26 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V26)/tensorboard --port 6006
+
+v26-pipeline: ## Run full V26 pipeline (data -> train -> eval)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V26 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)V26 addresses V25's stopword dominance:$(NC)"
+	@echo "  Root cause: Special tokens compressed IDF range"
+	@echo "  Fix: Exclude special tokens + increase penalties"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Compute IDF weights"
+	@echo "  2. Full training (25 epochs)"
+	@echo "  3. Evaluation and benchmark"
+	@echo ""
+	@echo "$(BLUE)[1/3]$(NC) Computing IDF weights..."
+	@$(MAKE) prepare-v26-idf
+	@echo ""
+	@echo "$(YELLOW)IDF weights ready.$(NC)"
+	@echo "To start training:"
+	@echo "  make train-v26-bg    (background)"
+	@echo "  make train-v26       (foreground)"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
+validate-semantic-ratio: ## Validate model semantic token ratio
+	@echo "$(BLUE)Validating semantic token ratio...$(NC)"
+	@$(PYTHON) scripts/validate_semantic_ratio.py \
+		--model $(V26_HF_DIR) \
+		--queries "당뇨병 치료 방법" "서울 맛집 추천" "파이썬 프로그래밍 배우기"
 
 ##@ Monitoring
 
