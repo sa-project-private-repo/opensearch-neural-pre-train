@@ -406,6 +406,27 @@ POST /documents/_search
 
 ---
 
+## Documentation
+
+상세 기술 문서는 [docs/](./docs/) 디렉토리를 참조하세요.
+
+### Concepts
+- [Neural Sparse Model 개요](./docs/concepts/01-neural-sparse-overview.md) - Neural Sparse 검색의 정의 및 비교
+- [SPLADE Architecture Deep Dive](./docs/concepts/02-splade-architecture.md) - XLM-RoBERTa 기반 아키텍처 상세
+- [Model Operation](./docs/concepts/03-model-operation.md) - Forward Pass 및 Inference 동작
+- [Loss Functions 상세](./docs/concepts/04-loss-functions.md) - 6개 손실 함수 및 Knowledge Distillation
+
+### Guides
+- [Training 가이드](./docs/guides/training-guide.md) - 환경 설정부터 학습까지
+- [OpenSearch 통합 가이드](./docs/guides/opensearch-integration.md) - Index 생성, 쿼리, Hybrid Search
+- [Model Loading 가이드](./docs/guides/model-loading-guide.md) - 다양한 로딩 시나리오
+
+### Reference
+- [Hyperparameter 참조](./docs/reference/hyperparameters.md) - V26 설정 및 튜닝 가이드
+- [한국어 Stopword 처리](./docs/reference/korean-stopwords.md) - 177개 불용어 및 처리 메커니즘
+
+---
+
 ## Version History
 
 | Version | Description | Status |
