@@ -6,45 +6,57 @@ Korean SPLADE-doc neural sparse retrieval model for OpenSearch.
 
 This repository contains training code and benchmarks for Korean neural sparse search models. The models enable semantic sparse search with synonym expansion for Korean terms.
 
-### Latest Version: V25 (XLM-RoBERTa with IDF-Aware FLOPS)
+### Latest Version: V26 (Enhanced IDF with Special Token Fix)
 
 | Property | Value |
 |----------|-------|
 | Base Model | `xlm-roberta-base` |
 | Parameters | 278M |
 | Vocabulary | 250,002 tokens |
-| Max Length | 512 |
+| Max Length | 192 |
 | Teacher | BAAI/bge-m3 |
 
-**Key Features (V25):**
-- IDF-Aware FLOPS: BM25-style IDF weighting (mandatory)
-- Korean Stopword Masking: 163 particles/endings penalized
-- Knowledge Distillation: BGE-M3 dense embeddings
-- Semantic Token Ratio Monitoring: Tracks semantic vs stopword activation
+**Key Features (V26):**
+- Special Token Fix: `<s>`, `</s>` excluded from IDF normalization
+- Enhanced FLOPS: 5x weight increase (0.002 → 0.010)
+- Stronger Stopword Penalty: 3x increase (5.0 → 15.0)
+- Sharper IDF Curve: alpha 2.5 → 4.0
+- Extended Stopword List: 177 tokens (vs V25's 98)
+
+**V26 vs V25 Hyperparameters:**
+
+| Parameter | V25 | V26 | Reason |
+|-----------|-----|-----|--------|
+| `lambda_flops` | 0.002 | **0.010** | 5x FLOPS penalty boost |
+| `stopword_penalty` | 5.0 | **15.0** | 3x stopword penalty boost |
+| `idf_alpha` | 2.5 | **4.0** | Sharper penalty curve |
+| `special_token_penalty` | - | **100.0** | Fixed penalty for special tokens |
 
 **Target Metrics:**
-- Semantic tokens in top-10: 80%+ (vs V24's 30%)
-- Stopword activation: <0.5 (vs V24's 5.8)
+- Semantic tokens in top-10: 80%+
+- Stopword activation: <0.3
+- Recall@1: BM25 parity or better
 
-### Previous Version: v21.4
+### V26 Benchmark Results
 
-| Property | Value |
-|----------|-------|
-| Base Model | `skt/A.X-Encoder-base` |
-| Parameters | 149M |
-| Vocabulary | 49,999 tokens |
-| Max Length | 64 |
+| Metric | V26 Neural Sparse | BM25 | BGE-M3 Dense |
+|--------|-------------------|------|--------------|
+| Recall@1 | **40.7%** | 30.0% | 37.1% |
+| Recall@5 | **51.4%** | 45.2% | 48.3% |
+| MRR | **0.4555** | 0.3612 | 0.4189 |
 
-**Key Improvements (v21.4):**
-- Curriculum Learning: 3-phase training (single-terms -> balanced -> full)
-- Dynamic Lambda Self: 8.0 for single-term, 4.0 for sentences
-- Minimum Activation Loss: Ensures meaningful top-k activations
+### V26 vs V25 Improvement
+
+| Metric | V25 | V26 | Improvement |
+|--------|-----|-----|-------------|
+| Recall@1 | 28.2% | 40.7% | **+44.3%** |
+| Semantic Ratio | 73.2% | 95.8% | **+30.9%** |
 
 ---
 
 ## Quick Start
 
-> **V25 Training Guide**: 단계별 학습 가이드는 [GUIDE.md](./GUIDE.md)를 참조하세요.
+> **V26 Training Guide**: 단계별 학습 가이드는 [GUIDE.md](./GUIDE.md)를 참조하세요.
 
 ### Installation
 
@@ -62,12 +74,12 @@ import torch
 import torch.nn as nn
 
 # Load model
-tokenizer = AutoTokenizer.from_pretrained("huggingface/v21.4")
-model = AutoModelForMaskedLM.from_pretrained("huggingface/v21.4")
+tokenizer = AutoTokenizer.from_pretrained("sewoong/korean-neural-sparse-encoder")
+model = AutoModelForMaskedLM.from_pretrained("sewoong/korean-neural-sparse-encoder")
 
 # Encode text
 def encode(text):
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=64)
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=192)
     with torch.no_grad():
         outputs = model(**inputs)
         logits = outputs.logits
@@ -90,14 +102,6 @@ for idx, val in zip(top_indices, top_values):
 
 ```
 opensearch-neural-pre-train/
-├── notebooks/
-│   ├── opensearch-neural-v21.4/          # Latest version
-│   │   ├── 00_huggingface_data_loading.ipynb
-│   │   ├── 01_data_augmentation.ipynb
-│   │   ├── 02_data_preparation.ipynb
-│   │   ├── 03_training.ipynb
-│   │   └── 04_evaluation.ipynb
-│   └── opensearch-neural-v19/            # Legacy cross-lingual
 ├── benchmark/                             # Benchmark framework
 │   ├── runner.py                          # Main benchmark runner
 │   ├── encoders.py                        # Dense/Sparse encoders
@@ -106,12 +110,14 @@ opensearch-neural-pre-train/
 │   └── config.py                          # Benchmark configuration
 ├── src/
 │   ├── model/                             # Model implementations
-│   ├── evaluation/                        # Ranking metrics
-│   └── pmi/                               # Co-occurrence analysis
+│   ├── train/                             # Training scripts (V26, V27)
+│   ├── preprocessing/                     # Data processing pipeline
+│   └── evaluation/                        # Ranking metrics
+├── configs/                               # Training configurations
+│   ├── train_v26.yaml                     # V26 configuration
+│   └── train_v27.yaml                     # V27 travel domain config
 ├── data/                                  # Training data
-├── huggingface/                           # Model releases
-│   ├── v21.4/                             # Latest model
-│   └── v1/                                # Initial release
+├── huggingface/v26/                       # V26 model for local use
 └── outputs/                               # Training outputs
 ```
 
@@ -166,63 +172,81 @@ outputs/benchmark/
 
 ## Training Pipeline
 
-### V25 Training (Recommended)
+### V26 Training (Recommended)
 
-V25 uses XLM-RoBERTa with IDF-aware FLOPS to suppress grammatical particles and promote semantic tokens.
+V26 fixes V25's stopword dominance problem by excluding special tokens from IDF normalization and increasing regularization strength.
 
 > 상세 가이드: [GUIDE.md](./GUIDE.md)
+
+#### V26 Make Commands
+
+| Command | Description |
+|---------|-------------|
+| `make prepare-v26-idf` | Compute IDF weights for V26 |
+| `make prepare-v26-data` | Prepare all V26 data |
+| `make train-v26` | Start V26 training (foreground) |
+| `make train-v26-bg` | Start V26 training (background with nohup) |
+| `make train-v26-resume` | Resume V26 training from checkpoint |
+| `make logs-v26` | View V26 training logs (real-time) |
+| `make tensorboard-v26` | Start TensorBoard for V26 |
+| `make convert-v26-hf` | Export V26 to HuggingFace format |
+| `make eval-v26` | Evaluate V26 model |
+| `make eval-v26-sparsity` | Analyze V26 sparsity patterns |
+| `make validate-semantic-ratio` | Validate semantic token ratio |
+| `make v26-pipeline` | Run full V26 pipeline |
 
 #### Full Training Pipeline
 
 ```bash
-# 1. Data preparation (BGE-M3 hard negatives mining)
-make prepare-v25-data
+# 1. IDF weights computation
+make prepare-v26-idf
 
-# 2. IDF weights computation (for FLOPS regularization)
-make prepare-v25-idf
+# 2. Start training (foreground)
+make train-v26
 
-# 3. Verify IDF setup
-make train-v25-verify
+# 3. Or start in background (recommended for long training)
+make train-v26-bg
 
-# 4. Start training
-make train-v25
+# 4. Monitor training
+make logs-v26
+make tensorboard-v26
 
 # 5. Resume from checkpoint (if interrupted)
-make train-v25-resume
+make train-v26-resume
+
+# 6. After training: export and validate
+make convert-v26-hf
+make validate-semantic-ratio
 ```
 
 #### Background Execution
 
-For long-running training on remote servers:
-
 ```bash
-# Method 1: nohup (simple)
-nohup make train-v25 > outputs/train_v25/training.log 2>&1 &
-echo $!  # Save PID for later
+# Method 1: Make target (recommended)
+make train-v26-bg
+# PID and log path will be shown
 
-# Method 2: tmux (recommended)
-tmux new -d -s train 'make train-v25'
+# Method 2: tmux (for interactive monitoring)
+tmux new -d -s train 'make train-v26'
 tmux attach -t train    # Attach to session
 # Ctrl+b, d              # Detach from session
-tmux kill-session -t train  # Kill session
+
+# Method 3: nohup (manual)
+nohup make train-v26 > outputs/train_v26/training.log 2>&1 &
 ```
 
 #### TensorBoard Monitoring
 
 ```bash
-# Start TensorBoard (foreground)
-tensorboard --logdir outputs/train_v25/tensorboard --port 6006 --bind_all
+# Use make target
+make tensorboard-v26
 
-# Start TensorBoard (background)
-nohup tensorboard --logdir outputs/train_v25/tensorboard --port 6006 --bind_all > /tmp/tensorboard.log 2>&1 &
-
-# Or use make target
-make tensorboard-v25
+# Or manually
+tensorboard --logdir outputs/train_v26/tensorboard --port 6006 --bind_all
 ```
 
 **Remote Access (SSH Tunneling):**
 ```bash
-# On local machine
 ssh -L 6006:localhost:6006 ec2-user@<EC2-IP>
 # Then open http://localhost:6006 in browser
 ```
@@ -231,80 +255,29 @@ ssh -L 6006:localhost:6006 ec2-user@<EC2-IP>
 
 ```bash
 # View live logs
-make logs-v25
+make logs-v26
 
 # Or directly
-tail -f outputs/train_v25/training.log
+tail -f outputs/train_v26/training.log
 
 # Check GPU usage
 nvidia-smi -l 1
 ```
 
-**V25 Loss Function:**
+**V26 Loss Function:**
 ```
 L_total = λ_infonce * L_infonce      # Contrastive learning
         + λ_self * L_self            # Self-reconstruction
         + λ_positive * L_positive    # Positive alignment
-        + λ_flops * L_idf_flops      # IDF-weighted sparsity (NEW)
+        + λ_flops * L_idf_flops      # IDF-weighted sparsity (enhanced)
         + λ_min_act * L_min_act      # Minimum activation
         + λ_kd * L_kd                # Knowledge distillation
 ```
 
-**IDF-Aware FLOPS:**
+**V26 IDF-Aware FLOPS Enhancements:**
+- Special tokens (`<s>`, `</s>`) → Fixed penalty 100.0 (excluded from IDF normalization)
 - High IDF (rare tokens like 서울, 맛있는) → Low penalty
-- Low IDF (common tokens like 을, 는) → High penalty (+ 5x stopword multiplier)
-
-### v21.4 Training (Legacy)
-
-```bash
-cd notebooks/opensearch-neural-v21.4/
-
-# 1. Load data from HuggingFace
-jupyter nbconvert --execute 00_huggingface_data_loading.ipynb
-
-# 2. Data augmentation
-jupyter nbconvert --execute 01_data_augmentation.ipynb
-
-# 3. Create triplet dataset
-jupyter nbconvert --execute 02_data_preparation.ipynb
-
-# 4. Train model (GPU required)
-jupyter nbconvert --execute 03_training.ipynb
-
-# 5. Evaluate
-jupyter nbconvert --execute 04_evaluation.ipynb
-```
-
-### Model Architecture
-
-```
-Document -> A.X-Encoder -> log(1 + ReLU(logits)) -> Max Pooling -> Sparse Vector
-```
-
-### Loss Function
-
-```
-L_total = λ_self * L_self           # Self-reconstruction
-        + λ_synonym * L_positive    # Synonym activation
-        + λ_margin * L_triplet      # Triplet margin loss
-        + λ_flops * L_flops         # Sparsity regularization
-        + λ_min_act * L_min_act     # Minimum activation (v21.4)
-```
-
-### Hyperparameters (v21.4)
-
-```yaml
-model_name: skt/A.X-Encoder-base
-batch_size: 64
-num_epochs: 30
-learning_rate: 3e-6
-lambda_self: 4.0 (8.0 for single-term)
-lambda_synonym: 10.0
-lambda_margin: 2.5
-lambda_flops: 8e-3
-lambda_min_act: 0.1
-target_margin: 1.5
-```
+- Low IDF (common tokens like 을, 는) → High penalty (15x stopword multiplier)
 
 ---
 
@@ -437,32 +410,20 @@ POST /documents/_search
 
 | Version | Description | Status |
 |---------|-------------|--------|
-| **V25** | XLM-RoBERTa + IDF-aware FLOPS + Korean stopword masking | **Latest** |
-| V24 | XLM-RoBERTa + BGE-M3 teacher (IDF config exists but inactive) | Deprecated |
-| v21.4 | Curriculum learning, dynamic lambda, min activation (KoBERT) | Stable |
-| v19 | Cross-lingual (KO-EN) with XLM-RoBERTa | Legacy |
+| **V26** | XLM-RoBERTa + Enhanced IDF + Special token fix + Extended stopwords | **Production** |
+| V27 | Travel/Tourism domain enhancement (in development) | Development |
 
-<details>
-<summary><b>v19 Cross-lingual Details</b></summary>
+### V26 Technical Details
 
-### Model Specification
-
-| Property | Value |
-|----------|-------|
-| Base Model | `xlm-roberta-large` |
-| Parameters | 560M |
-| Vocabulary | 250,002 tokens |
-| Languages | Korean, English |
-
-### Data Sources
-
-| Source | Description | Pairs |
-|--------|-------------|-------|
-| MUSE | Facebook bilingual dictionary | ~20,000 |
-| Wikidata | Entity labels (ko/en) | ~10,000 |
-| IT Terminology | Technical terms | ~80 |
-
-</details>
+| Aspect | Value |
+|--------|-------|
+| Base Model | `xlm-roberta-base` |
+| Special Token Handling | Excluded from IDF normalization + fixed penalty 100.0 |
+| FLOPS Weight | 0.010 |
+| Stopword Penalty | 15.0 |
+| IDF Alpha | 4.0 |
+| Stopword Count | 177 |
+| Semantic Ratio | 95.8% |
 
 ---
 
