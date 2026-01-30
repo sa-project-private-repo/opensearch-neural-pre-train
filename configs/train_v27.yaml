@@ -1,0 +1,202 @@
+# V27 XLM-RoBERTa Training Configuration with Travel/Tourism Domain Data
+# Neural Sparse model with enhanced domain coverage for Korean travel queries
+#
+# Key improvements over V26:
+#   - Added travel/tourism domain training data (~110K samples)
+#   - Better location token activation (서울, 부산, 제주, etc.)
+#   - Improved semantic coverage for travel-related queries
+#   - Hard negative mining with location-aware sampling
+#
+# Root cause addressed:
+#   V26 problem: "서울 여행 추천" query only activates "여행" token,
+#   missing location and action terms due to lack of domain data.
+#   V27 solution: Add travel domain triplets with location-based
+#   hard negatives to teach location-specific semantics.
+#
+# Expected performance:
+#   - "서울 여행" top-5 tokens: 서울, 여행, 추천, 관광, 명소
+#   - Travel domain Recall@1: >40%
+#   - Overall Recall@1: ≥40% (maintain V26 level)
+#
+# Usage:
+#   python -m src.train v27 --config configs/train_v27.yaml
+#   make train-v27
+
+# Model Configuration (same as V26)
+model:
+  name: "xlm-roberta-base"       # 250K vocab for richer sparse representations
+  dropout: 0.1
+  use_expansion: true            # Use MLM-based vocabulary expansion
+  expansion_mode: "mlm"          # XLM-R MLM head
+  freeze_encoder_layers: 0       # No freezing for full fine-tuning
+  model_class: "SPLADEDocXLMR"   # Use XLM-R specific model class
+
+# Data Configuration (V27: includes travel domain)
+data:
+  train_files:
+    - "data/v24.0/train_*.jsonl"           # Base training data
+    - "data/v27.0/train_travel_*.jsonl"    # Travel domain data
+  val_files:
+    - "data/v24.0/val.jsonl"
+    - "data/v27.0/val_travel.jsonl"        # Travel validation
+  batch_size: 24                 # Same as V26
+  max_length: 192                # Same as V26
+  num_workers: 4
+  prefetch_factor: 2
+  pin_memory: true
+
+# Loss Configuration (same as V26)
+loss:
+  # Loss weights
+  lambda_infonce: 3.0            # Contrastive signal
+  lambda_self: 0.5               # Self-reconstruction
+  lambda_positive: 2.0           # Positive activation
+  lambda_margin: 0.0             # Disabled
+  lambda_flops: 0.010            # FLOPS regularization (V26 level)
+  lambda_min_act: 1.0            # Activation floor
+
+  # Knowledge distillation
+  lambda_kd: 2.0                 # Teacher guidance
+  kd_temperature: 3.0            # Soft distribution matching
+
+  # Loss hyperparameters
+  temperature: 0.07              # InfoNCE temperature
+  margin: 0.3                    # Cosine similarity margin
+  top_k: 5                       # Top-k for minimum activation
+  min_activation: 0.5            # Minimum activation threshold
+
+  # IDF Configuration (same as V26)
+  use_idf_weighting: true
+  idf_alpha: 4.0                 # Sharper penalty curve
+  idf_weights_path: null         # Compute from corpus
+  recompute_idf: false
+  idf_smoothing: "bm25"
+
+  # Special Token Configuration (same as V26)
+  special_token_penalty: 100.0   # Fixed penalty for <s>, </s>
+
+  # Stopword Configuration (same as V26)
+  use_stopword_mask: true
+  stopword_penalty: 15.0
+  use_extended_stopwords: true
+
+# Training Configuration
+training:
+  num_epochs: 25                 # Same as V26
+  learning_rate: 0.00003
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 4 # Effective batch size = 24 * 4 = 96
+
+  # Mixed precision
+  mixed_precision: "bf16"
+
+  # Checkpointing
+  save_every_n_epochs: 5
+  save_every_n_steps: null
+  keep_last_n_checkpoints: 3
+
+  # Logging
+  log_every_n_steps: 50
+  eval_every_n_steps: null
+
+  # Output
+  output_dir: "outputs/train_v27"
+  experiment_name: "splade_v27_xlmr_travel_domain"
+
+# Knowledge Distillation Configuration (same as V26)
+knowledge_distillation:
+  enabled: true
+  teacher_model: "BAAI/bge-m3"
+  teacher_max_length: 512
+  normalize_embeddings: true
+  warmup_epochs: 1
+
+# Curriculum Learning Configuration
+enable_curriculum: true
+
+curriculum_phases:
+  # Phase 1: Foundation with travel data emphasis (8 epochs)
+  - start_epoch: 1
+    end_epoch: 8
+    temperature: 0.08
+    lambda_infonce: 2.5
+    lambda_kd: 2.5
+    lr_multiplier: 1.0
+    data_weights:
+      single_term: 0.3
+      multi_term: 0.3
+      original: 0.2
+      travel: 0.2                # New: travel domain
+    description: "Phase 1: Foundation with travel domain integration"
+
+  # Phase 2: Balanced training with hard negatives (9 epochs)
+  - start_epoch: 9
+    end_epoch: 17
+    temperature: 0.05
+    lambda_infonce: 3.0
+    lambda_kd: 1.5
+    lr_multiplier: 0.5
+    data_weights:
+      single_term: 0.25
+      multi_term: 0.25
+      hard_neg: 0.25
+      travel: 0.25               # Equal weight for travel
+    description: "Phase 2: Balanced training with travel hard negatives"
+
+  # Phase 3: Refinement (8 epochs)
+  - start_epoch: 18
+    end_epoch: 25
+    temperature: 0.04
+    lambda_infonce: 3.0
+    lambda_kd: 0.8
+    lr_multiplier: 0.25
+    data_weights:
+      hard_neg: 0.4
+      multi_term: 0.2
+      single_term: 0.15
+      travel: 0.25               # Maintain travel emphasis
+    description: "Phase 3: Hard negative refinement with travel domain"
+
+# Hard Negative Mining Configuration
+hard_negative_mining:
+  enabled: true
+  bm25_negatives: 5
+  dense_negatives: 5
+  refresh_every_n_epochs: 5
+
+# General Settings
+device: "cuda"
+seed: 42
+
+# Notes:
+# =================
+# V27 addresses V26's domain coverage gap for travel/tourism queries.
+#
+# Problem in V26:
+#   - Query "서울 여행 추천" only activates "여행" token
+#   - Missing activation for "서울" (location) and "추천" (action)
+#   - Root cause: Lack of travel/tourism domain training data
+#
+# Solution in V27:
+#   1. Collect travel domain data from Wikipedia, Namuwiki, templates
+#   2. Generate location-aware hard negatives (Seoul vs Busan)
+#   3. Include travel triplets in curriculum learning
+#   4. Validate with travel-specific queries
+#
+# New data sources:
+#   - Wikipedia travel categories: ~50K articles
+#   - Namuwiki dump (if available): ~30K articles
+#   - Template-generated triplets: ~10K samples
+#   - Korpora travel content: ~20K samples
+#
+# Validation queries:
+#   - "서울 여행 추천" → expect 서울, 여행, 추천, 관광
+#   - "부산 맛집" → expect 부산, 맛집, 음식점
+#   - "제주도 관광" → expect 제주, 관광, 여행
+#
+# Success criteria:
+#   - Location tokens in top-5: 80%+ of travel queries
+#   - Travel domain Recall@1: >40%
+#   - Overall Recall@1: ≥40% (maintain parity)

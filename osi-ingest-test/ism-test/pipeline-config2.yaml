@@ -1,0 +1,23 @@
+version: "2"
+ism-logs-test:
+  source:
+    http:
+      path: "/logs"
+  processor:
+    - date:
+        from_time_received: true
+        destination: "@timestamp"
+  sink:
+    - opensearch:
+        hosts:
+          - "https://search-ltr-vector-hnevayhl2dk5ntem55fexzf6ji.us-east-1.es.amazonaws.com"
+        index: "logs-index-%{yyyy.MM.dd}"
+        aws:
+          sts_role_arn: "arn:aws:iam::505725882051:role/OSIUBIPipelineRole"
+          region: "us-east-1"
+        dlq:
+          s3:
+            bucket: "bedrock-base-database"
+            sts_role_arn: "arn:aws:iam::505725882051:role/OSIUBIPipelineRole"
+            region: "us-east-1"
+            key_path_prefix: "os-ingestion/ism-logs"

@@ -8,7 +8,9 @@
 	eval-v25 eval-v25-sparsity convert-v25-hf logs-v25 tensorboard-v25 v25-pipeline \
 	prepare-v26-idf prepare-v26-data train-v26 train-v26-bg train-v26-resume \
 	eval-v26 eval-v26-sparsity convert-v26-hf logs-v26 tensorboard-v26 v26-pipeline \
-	validate-semantic-ratio
+	validate-semantic-ratio \
+	collect-travel prepare-v27-data train-v27 train-v27-bg train-v27-resume \
+	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -26,6 +28,7 @@ CONFIG_V22 := configs/train_v22.yaml
 CONFIG_V24 := configs/train_v24.yaml
 CONFIG_V25 := configs/train_v25.yaml
 CONFIG_V26 := configs/train_v26.yaml
+CONFIG_V27 := configs/train_v27.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
@@ -35,6 +38,7 @@ OUTPUT_V22 := outputs/train_v22
 OUTPUT_V24 := outputs/train_v24
 OUTPUT_V25 := outputs/train_v25
 OUTPUT_V26 := outputs/train_v26
+OUTPUT_V27 := outputs/train_v27
 
 # V25 specific directories
 IDF_WEIGHTS_DIR := outputs/idf_weights
@@ -45,6 +49,11 @@ V25_HF_DIR := huggingface/v25
 # V26 specific directories
 V26_CHECKPOINT_DIR := checkpoints/v26.0
 V26_HF_DIR := huggingface/v26
+
+# V27 specific directories
+V27_DATA_DIR := data/v27.0
+V27_CHECKPOINT_DIR := checkpoints/v27.0
+V27_HF_DIR := huggingface/v27
 
 # Colors for output
 BLUE := \033[0;34m
@@ -496,6 +505,144 @@ validate-semantic-ratio: ## Validate model semantic token ratio
 	@$(PYTHON) scripts/validate_semantic_ratio.py \
 		--model $(V26_HF_DIR) \
 		--queries "당뇨병 치료 방법" "서울 맛집 추천" "파이썬 프로그래밍 배우기"
+
+##@ V27 Travel Domain Training Pipeline
+
+collect-travel: ## Collect travel/tourism domain data for V27
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Collecting Travel Domain Data$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(YELLOW)Sources:$(NC)"
+	@echo "  - Korean Wikipedia travel categories"
+	@echo "  - Template-generated triplets"
+	@echo "$(YELLOW)Output:$(NC) $(V27_DATA_DIR)/raw"
+	@echo ""
+	@mkdir -p $(V27_DATA_DIR)/raw
+	@$(PYTHON) scripts/collect_travel_data.py \
+		--output $(V27_DATA_DIR)/raw \
+		--sources wikipedia,template
+	@echo "$(GREEN)✓ Travel data collected$(NC)"
+
+collect-travel-full: ## Collect travel data from all sources (requires Namuwiki dump)
+	@echo "$(BLUE)Collecting travel data from all sources...$(NC)"
+	@mkdir -p $(V27_DATA_DIR)/raw
+	@$(PYTHON) scripts/collect_travel_data.py \
+		--output $(V27_DATA_DIR)/raw \
+		--sources wikipedia,namuwiki,korpora,template
+	@echo "$(GREEN)✓ Full travel data collected$(NC)"
+
+prepare-v27-triplets: ## Generate triplets from collected travel data
+	@echo "$(BLUE)Generating travel domain triplets...$(NC)"
+	@$(PYTHON) scripts/travel_triplet_generator.py \
+		--input $(V27_DATA_DIR)/raw \
+		--output $(V27_DATA_DIR) \
+		--include-templates
+	@echo "$(GREEN)✓ Travel triplets generated$(NC)"
+
+prepare-v27-data: collect-travel prepare-v27-triplets ## Prepare all V27 data (collect + generate triplets)
+	@echo "$(GREEN)✓ V27 data preparation complete$(NC)"
+	@echo ""
+	@$(PYTHON) scripts/collect_travel_data.py --stats
+
+train-v27: ## V27 training with travel domain data
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V27 Travel Domain Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V27)"
+	@echo "Output: $(OUTPUT_V27)"
+	@echo ""
+	@echo "$(YELLOW)V27 Key Improvements over V26:$(NC)"
+	@echo "  - Travel/tourism domain data (~110K samples)"
+	@echo "  - Location-aware hard negatives"
+	@echo "  - Better coverage for travel queries"
+	@echo ""
+	@echo "$(YELLOW)Expected Results:$(NC)"
+	@echo "  - Location tokens (서울, 부산) in top-5"
+	@echo "  - Travel domain Recall@1 > 40%"
+	@echo ""
+	@echo "Mixed precision: BF16"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) -m src.train v27 --config $(CONFIG_V27)
+
+train-v27-bg: ## V27 training in background (nohup)
+	@echo "$(BLUE)Starting V27 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V27)
+	@nohup $(PYTHON) -m src.train v27 --config $(CONFIG_V27) > $(OUTPUT_V27)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'src.train v27' | tail -1)"
+	@echo "Log: $(OUTPUT_V27)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v27"
+	@echo "  make tensorboard-v27"
+
+train-v27-resume: ## Resume V27 training from checkpoint
+	@echo "$(BLUE)Resuming V27 training from checkpoint...$(NC)"
+	@$(PYTHON) -m src.train v27 --config $(CONFIG_V27) --resume
+
+eval-v27: ## Evaluate V27 model on validation set
+	@echo "$(BLUE)Evaluating V27 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V27_HF_DIR)/best \
+		--num-samples 100
+
+eval-v27-travel: ## Evaluate V27 on travel domain queries
+	@echo "$(BLUE)V27 Travel Domain Evaluation...$(NC)"
+	@$(PYTHON) scripts/validate_semantic_ratio.py \
+		--model $(V27_HF_DIR) \
+		--queries "서울 여행 추천" "부산 맛집" "제주도 관광" "강원도 숙소" "경주 여행 코스"
+
+convert-v27-hf: ## Convert V27 checkpoint to HuggingFace format
+	@echo "$(BLUE)Converting V27 checkpoint to HuggingFace format...$(NC)"
+	@mkdir -p $(V27_HF_DIR)
+	@$(PYTHON) scripts/export_v25_to_huggingface.py \
+		--checkpoint $(OUTPUT_V27)/best_model \
+		--output $(V27_HF_DIR)
+	@echo "$(GREEN)✓ Converted to $(V27_HF_DIR)$(NC)"
+
+logs-v27: ## Show V27 training logs (real-time)
+	@echo "$(BLUE)V27 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V27)/training.log ]; then \
+		tail -f $(OUTPUT_V27)/training.log; \
+	elif [ -f $(OUTPUT_V27)/nohup.out ]; then \
+		tail -f $(OUTPUT_V27)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v27$(NC)"; \
+	fi
+
+tensorboard-v27: ## Start TensorBoard for V27 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V27)/tensorboard --port 6006
+
+v27-pipeline: ## Run full V27 pipeline (collect -> prepare -> train -> eval)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V27 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)V27 addresses travel domain coverage:$(NC)"
+	@echo "  Root cause: V26 lacks travel/tourism training data"
+	@echo "  Fix: Add 110K travel triplets with location negatives"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Collect travel data"
+	@echo "  2. Generate triplets"
+	@echo "  3. Full training (25 epochs)"
+	@echo "  4. Evaluation"
+	@echo ""
+	@echo "$(BLUE)[1/4]$(NC) Collecting travel data..."
+	@$(MAKE) collect-travel
+	@echo ""
+	@echo "$(BLUE)[2/4]$(NC) Generating triplets..."
+	@$(MAKE) prepare-v27-triplets
+	@echo ""
+	@echo "$(YELLOW)Data preparation complete.$(NC)"
+	@echo "To start training:"
+	@echo "  make train-v27-bg    (background)"
+	@echo "  make train-v27       (foreground)"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline steps 1-2 complete$(NC)"
 
 ##@ Monitoring
 
