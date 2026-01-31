@@ -37,13 +37,20 @@ This repository contains training code and benchmarks for Korean neural sparse s
 - Stopword activation: <0.3
 - Recall@1: BM25 parity or better
 
-### V26 Benchmark Results
+### V26 Benchmark Results (5 Search Methods)
 
-| Metric | V26 Neural Sparse | BM25 | BGE-M3 Dense |
-|--------|-------------------|------|--------------|
-| Recall@1 | **40.7%** | 30.0% | 37.1% |
-| Recall@5 | **51.4%** | 45.2% | 48.3% |
-| MRR | **0.4555** | 0.3612 | 0.4189 |
+| Method | Recall@1 | Recall@5 | Recall@10 | MRR | P50 (ms) |
+|--------|----------|----------|-----------|-----|----------|
+| **Sparse+Semantic (RRF)** | **44.6%** | **53.0%** | **56.4%** | **0.486** | 122.8 |
+| Neural Sparse | 40.7% | 51.4% | 56.1% | 0.456 | 13.0 |
+| Semantic (Dense) | 37.1% | 50.2% | 53.1% | 0.431 | 15.6 |
+| BM25+Semantic (RRF) | 37.1% | 48.2% | 51.6% | 0.421 | 94.8 |
+| BM25 | 30.0% | 42.2% | 44.6% | 0.354 | 11.6 |
+
+**Key Findings:**
+- **Sparse+Semantic hybrid achieves best performance** (Recall@1 44.6%)
+- Neural Sparse outperforms Dense Semantic by +3.6pp
+- Sparse+Semantic outperforms BM25+Semantic by +7.5pp
 
 ### V26 vs V25 Improvement
 
@@ -134,7 +141,8 @@ Compare search methods against a validation dataset.
 | BM25 | Lexical keyword search | text |
 | Semantic | Dense vector k-NN (bge-m3) | knn_vector |
 | Neural Sparse | SPLADE sparse vectors | rank_features |
-| Hybrid | BM25 + k-NN combination | text + knn_vector |
+| BM25+Semantic | BM25 + Dense hybrid (RRF fusion) | text + knn_vector |
+| Sparse+Semantic | Neural Sparse + Dense hybrid (RRF fusion) | rank_features + knn_vector |
 
 ### Running Benchmarks
 
@@ -145,8 +153,13 @@ python -m benchmark.runner --sample-size 1000 --output-dir outputs/benchmark
 # Skip indexing (data already indexed)
 python -m benchmark.runner --sample-size 1000 --skip-setup --output-dir outputs/benchmark
 
-# Parallel execution (all methods simultaneously)
-python -m benchmark.runner --sample-size 1000 --skip-setup --parallel --output-dir outputs/benchmark
+# Include hybrid methods (BM25+Semantic, Sparse+Semantic)
+python -m benchmark.runner --sample-size 1000 --skip-setup --include-hybrid --output-dir outputs/benchmark
+
+# Run specific methods only
+python -m benchmark.runner --sample-size 1000 --skip-setup --include-hybrid \
+    --methods bm25 semantic neural_sparse bm25_semantic_rrf hybrid_rrf \
+    --output-dir outputs/benchmark
 ```
 
 ### Options
@@ -156,6 +169,8 @@ python -m benchmark.runner --sample-size 1000 --skip-setup --parallel --output-d
 | `--sample-size` | Number of queries | 2000 |
 | `--skip-setup` | Skip index creation | False |
 | `--parallel` | Run all methods in parallel | False |
+| `--include-hybrid` | Include hybrid methods (RRF fusion) | False |
+| `--methods` | Specific methods to run | All |
 | `--cleanup` | Delete indices after benchmark | False |
 | `--output-dir` | Output directory | outputs/benchmark |
 

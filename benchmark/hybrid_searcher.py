@@ -28,6 +28,7 @@ from benchmark.searchers import (
     SearchResult,
     SemanticSearcher,
     NeuralSparseSearcher,
+    BM25Searcher,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,113 @@ class HybridSparseSemanticSearcher(BaseSearcher):
             "sparse": self._sparse_searcher.search(query),
             "dense": self._semantic_searcher.search(query),
         }
+
+
+class HybridBM25SemanticSearcher(BaseSearcher):
+    """
+    Hybrid search combining BM25 and Dense Semantic search with late fusion.
+
+    Uses late fusion to combine results from both search methods,
+    taking advantage of BM25's exact matching and dense's
+    semantic understanding.
+    """
+
+    def __init__(
+        self,
+        client: OpenSearch,
+        bm25_index: str,
+        dense_index: str,
+        dense_encoder: BgeM3Encoder,
+        fusion_method: str = "rrf",
+        top_k: int = 10,
+        retrieval_k: int = 100,
+        **fusion_kwargs,
+    ):
+        """
+        Initialize BM25+Semantic hybrid searcher.
+
+        Args:
+            client: OpenSearch client
+            bm25_index: Index name for BM25 search
+            dense_index: Index name for dense vectors
+            dense_encoder: BGE-M3 encoder
+            fusion_method: Fusion strategy ("rrf", "linear", "weighted_rrf")
+            top_k: Number of final results to return
+            retrieval_k: Number of results to retrieve from each method
+            **fusion_kwargs: Additional parameters for fusion method
+        """
+        super().__init__(client, bm25_index, top_k)
+
+        self.bm25_index = bm25_index
+        self.dense_index = dense_index
+        self.dense_encoder = dense_encoder
+        self.retrieval_k = retrieval_k
+
+        # Create fusion method
+        self.fusion: ScoreFusion = create_fusion_method(
+            fusion_method, **fusion_kwargs
+        )
+        self.fusion_method = fusion_method
+
+        # Create sub-searchers
+        self._bm25_searcher = BM25Searcher(
+            client=client,
+            index_name=bm25_index,
+            top_k=retrieval_k,
+        )
+        self._semantic_searcher = SemanticSearcher(
+            client=client,
+            index_name=dense_index,
+            encoder=dense_encoder,
+            top_k=retrieval_k,
+        )
+
+    def search(self, query: str) -> SearchResponse:
+        """
+        Execute hybrid search with late fusion.
+
+        Args:
+            query: Search query string
+
+        Returns:
+            Fused search results
+        """
+        start = time.perf_counter()
+
+        # Execute both searches
+        bm25_response = self._bm25_searcher.search(query)
+        dense_response = self._semantic_searcher.search(query)
+
+        # Convert to RankedResult for fusion
+        bm25_ranked = [
+            RankedResult(doc_id=r.doc_id, score=r.score, rank=r.rank)
+            for r in bm25_response.results
+        ]
+        dense_ranked = [
+            RankedResult(doc_id=r.doc_id, score=r.score, rank=r.rank)
+            for r in dense_response.results
+        ]
+
+        # Fuse results
+        fused_results = self.fusion.fuse(bm25_ranked, dense_ranked)
+
+        # Take top_k and convert back to SearchResult
+        final_results = [
+            SearchResult(
+                doc_id=r.doc_id,
+                score=r.score,
+                rank=i + 1,
+            )
+            for i, r in enumerate(fused_results[: self.top_k])
+        ]
+
+        total_latency = (time.perf_counter() - start) * 1000
+
+        return SearchResponse(
+            results=final_results,
+            latency_ms=total_latency,
+            total_hits=len(fused_results),
+        )
 
 
 class HybridNativeSearcher(BaseSearcher):
@@ -305,6 +413,18 @@ def create_hybrid_searchers(
         Dict mapping hybrid method name to searcher instance
     """
     return {
+        # BM25 + Semantic (late fusion)
+        "bm25_semantic_rrf": HybridBM25SemanticSearcher(
+            client=client,
+            bm25_index=config.bm25_index,
+            dense_index=config.dense_index,
+            dense_encoder=dense_encoder,
+            fusion_method="rrf",
+            top_k=config.top_k,
+            retrieval_k=100,
+            k=60,
+        ),
+        # Sparse + Semantic (late fusion)
         "hybrid_rrf": HybridSparseSemanticSearcher(
             client=client,
             sparse_index=config.sparse_index,
