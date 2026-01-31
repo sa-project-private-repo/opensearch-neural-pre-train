@@ -31,8 +31,13 @@ test: build
 	./$(BINARY) -interval=500ms -batch=5 -count=10
 
 # Long running test for ISM
+# Usage: make ism-test INTERVAL=1s BATCH=50 COUNT=0
+ISM_INTERVAL ?= 1s
+ISM_BATCH ?= 50
+ISM_COUNT ?= 0
+
 ism-test: build
-	./$(BINARY) -interval=1s -batch=10 -count=0
+	./$(BINARY) -interval=$(ISM_INTERVAL) -batch=$(ISM_BATCH) -count=$(ISM_COUNT)
 
 # Help
 help:
@@ -41,9 +46,11 @@ help:
 	@echo "  make run       - Build and run with defaults"
 	@echo "  make send      - Run with custom options (INTERVAL, BATCH, COUNT)"
 	@echo "  make test      - Quick test (10 docs)"
-	@echo "  make ism-test  - Long running ISM test"
+	@echo "  make ism-test  - Long running ISM test (default: 50/sec)"
 	@echo "  make clean     - Remove binary"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make send INTERVAL=2s BATCH=5"
 	@echo "  make send INTERVAL=1s BATCH=10 COUNT=1000"
+	@echo "  make ism-test ISM_BATCH=100 ISM_INTERVAL=500ms"
+	@echo "  make ism-test ISM_COUNT=10000"
