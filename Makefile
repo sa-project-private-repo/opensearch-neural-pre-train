@@ -10,7 +10,9 @@
 	eval-v26 eval-v26-sparsity convert-v26-hf logs-v26 tensorboard-v26 v26-pipeline \
 	validate-semantic-ratio \
 	collect-travel prepare-v27-data train-v27 train-v27-bg train-v27-resume \
-	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline
+	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline \
+	build-korean-tokens train-v28 train-v28-bg train-v28-resume train-v28-after-v27 train-v28a \
+	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -644,6 +646,143 @@ v27-pipeline: ## Run full V27 pipeline (collect -> prepare -> train -> eval)
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline steps 1-2 complete$(NC)"
 
+##@ V28 Context-Gated Training Pipeline
+
+# V28 specific directories
+V28_DATA_DIR := data/v28.0
+V28_CHECKPOINT_DIR := checkpoints/v28.0
+V28_HF_DIR := huggingface/v28
+CONFIG_V28 := configs/train_v28.yaml
+OUTPUT_V28 := outputs/train_v28
+
+build-korean-tokens: ## Build Korean token ID set for V28 language filtering
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Building Korean Token IDs$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@mkdir -p $(OUTPUT_V28)
+	@$(PYTHON) -c "from src.train.idf.korean_tokens import build_korean_token_ids, save_korean_token_ids, analyze_token_language_distribution; \
+		from transformers import AutoTokenizer; \
+		tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base'); \
+		analyze_token_language_distribution(tokenizer); \
+		ids = build_korean_token_ids(tokenizer); \
+		save_korean_token_ids(ids, '$(OUTPUT_V28)/korean_token_ids.json')"
+	@echo "$(GREEN)✓ Korean token IDs saved to $(OUTPUT_V28)/korean_token_ids.json$(NC)"
+
+train-v28: ## V28 training with language filtering and context gate
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V28 Context-Gated Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V28)"
+	@echo "Output: $(OUTPUT_V28)"
+	@echo ""
+	@echo "$(YELLOW)V28 Key Features:$(NC)"
+	@echo "  - V28a: Korean language filtering"
+	@echo "  - V28b: Context-gated sparse expansion"
+	@echo "  - Inherits V26 IDF-aware FLOPS"
+	@echo ""
+	@echo "$(YELLOW)Expected Results:$(NC)"
+	@echo "  - Korean token ratio > 85%"
+	@echo "  - Context discrimination rate > 60%"
+	@echo "  - Recall@1 > 40%"
+	@echo ""
+	@echo "Mixed precision: BF16"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) -m src.train v28 --config $(CONFIG_V28)
+
+train-v28-bg: ## V28 training in background (nohup)
+	@echo "$(BLUE)Starting V28 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V28)
+	@nohup $(PYTHON) -m src.train v28 --config $(CONFIG_V28) > $(OUTPUT_V28)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'src.train v28' | tail -1)"
+	@echo "Log: $(OUTPUT_V28)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v28"
+	@echo "  make tensorboard-v28"
+
+train-v28-resume: ## Resume V28 training from checkpoint
+	@echo "$(BLUE)Resuming V28 training from checkpoint...$(NC)"
+	@$(PYTHON) -m src.train v28 --config $(CONFIG_V28) --resume
+
+train-v28-after-v27: ## Wait for V27 completion and auto-start V28
+	@echo "$(BLUE)Starting V28 auto-start after V27...$(NC)"
+	@./scripts/run_v28_after_v27.sh
+
+train-v28a: ## V28a only (language filtering, no context gate)
+	@echo "$(BLUE)Starting V28a (Language Filtering Only)...$(NC)"
+	@$(PYTHON) -m src.train v28 --config $(CONFIG_V28) --no-context-gate
+
+eval-v28: ## Evaluate V28 model on validation set
+	@echo "$(BLUE)Evaluating V28 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V28_HF_DIR)/best \
+		--num-samples 100
+
+eval-v28-language: ## Analyze V28 Korean vs non-Korean token ratio
+	@echo "$(BLUE)V28 Language Distribution Analysis...$(NC)"
+	@$(PYTHON) scripts/validate_semantic_ratio.py \
+		--model $(V28_HF_DIR) \
+		--queries "토니 베넷의 중간 이름은?" "당뇨병 치료 방법" "서울 맛집 추천"
+
+eval-v28-context: ## Analyze V28 context discrimination
+	@echo "$(BLUE)V28 Context Discrimination Analysis...$(NC)"
+	@$(PYTHON) -c "from benchmark.encoders import NeuralSparseEncoder; \
+		encoder = NeuralSparseEncoder('$(V28_HF_DIR)'); \
+		q1 = encoder.encode(['출근했는데 점심 메뉴 추천해줘'])[0]; \
+		q2 = encoder.encode(['학교를 갔는데 점심 메뉴 추천해줘'])[0]; \
+		overlap = set(q1.keys()) & set(q2.keys()); \
+		print(f'Context overlap: {len(overlap)} / {len(set(q1.keys()) | set(q2.keys()))} tokens'); \
+		print(f'Overlap ratio: {100*len(overlap)/max(len(q1), len(q2)):.1f}%')"
+
+convert-v28-hf: ## Convert V28 checkpoint to HuggingFace format
+	@echo "$(BLUE)Converting V28 checkpoint to HuggingFace format...$(NC)"
+	@mkdir -p $(V28_HF_DIR)
+	@$(PYTHON) scripts/export_v25_to_huggingface.py \
+		--checkpoint $(OUTPUT_V28)/best_model \
+		--output $(V28_HF_DIR)
+	@echo "$(GREEN)✓ Converted to $(V28_HF_DIR)$(NC)"
+
+logs-v28: ## Show V28 training logs (real-time)
+	@echo "$(BLUE)V28 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V28)/training.log ]; then \
+		tail -f $(OUTPUT_V28)/training.log; \
+	elif [ -f $(OUTPUT_V28)/nohup.out ]; then \
+		tail -f $(OUTPUT_V28)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v28$(NC)"; \
+	fi
+
+tensorboard-v28: ## Start TensorBoard for V28 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V28)/tensorboard --port 6006
+
+v28-pipeline: ## Run full V28 pipeline (build tokens -> train -> eval)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V28 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)V28 addresses multilingual token leakage:$(NC)"
+	@echo "  V28a: Korean language filtering"
+	@echo "  V28b: Context-gated sparse expansion"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Build Korean token IDs"
+	@echo "  2. Full training (25 epochs)"
+	@echo "  3. Evaluation"
+	@echo ""
+	@echo "$(BLUE)[1/3]$(NC) Building Korean token IDs..."
+	@$(MAKE) build-korean-tokens
+	@echo ""
+	@echo "$(YELLOW)Token IDs ready.$(NC)"
+	@echo "To start training:"
+	@echo "  make train-v28-bg    (background)"
+	@echo "  make train-v28       (foreground)"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
 ##@ Monitoring
 
 monitor: ## Monitor GPU usage (real-time)
@@ -736,6 +875,31 @@ info: ## Show system and training information
 	@echo "  Pre-train: $(OUTPUT_PRETRAIN)"
 	@echo "  Fine-tune: $(OUTPUT_FINETUNE)"
 	@echo "$(BLUE)========================================$(NC)"
+
+##@ HuggingFace Benchmark
+
+benchmark-ko-strategyqa: ## Run benchmark on Ko-StrategyQA dataset
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Ko-StrategyQA Benchmark$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Dataset: mteb/Ko-StrategyQA"
+	@echo "  - 592 queries"
+	@echo "  - 9,251 documents"
+	@echo ""
+	@$(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--output-dir outputs/benchmark_ko_strategyqa \
+		--index-suffix kostrategyqa \
+		--cleanup
+	@echo "$(GREEN)✓ Benchmark complete$(NC)"
+
+benchmark-ko-strategyqa-skip: ## Run Ko-StrategyQA benchmark (skip setup)
+	@echo "$(BLUE)Running Ko-StrategyQA benchmark (skip-setup)...$(NC)"
+	@$(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--output-dir outputs/benchmark_ko_strategyqa \
+		--index-suffix kostrategyqa \
+		--skip-setup
 
 ##@ Development
 

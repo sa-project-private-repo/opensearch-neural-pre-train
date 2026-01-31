@@ -2,7 +2,13 @@
 
 from src.train.core.trainer import SPLADETrainer
 from src.train.core.checkpoint import CheckpointManager
-from src.train.core.hooks import TrainingHook, LoggingHook, CheckpointHook, CurriculumHook
+from src.train.core.hooks import (
+    TrainingHook,
+    LoggingHook,
+    CheckpointHook,
+    CurriculumHook,
+    GradientMonitorHook,
+)
 
 __all__ = [
     "SPLADETrainer",
@@ -11,4 +17,5 @@ __all__ = [
     "LoggingHook",
     "CheckpointHook",
     "CurriculumHook",
+    "GradientMonitorHook",
 ]

@@ -369,6 +369,235 @@ def create_splade_xlmr(
         )
 
 
+class ContextGate(nn.Module):
+    """
+    Context-based gating module for sparse expansion (V28).
+
+    Computes document-level context vector and projects it to a
+    vocab-sized gate that modulates token activations.
+
+    Architecture:
+        Hidden States -> Attention Pooling -> Context Vector
+        Context Vector -> Gate MLP -> Vocab-sized Gate [0, 1]
+    """
+
+    def __init__(
+        self,
+        hidden_size: int = 768,
+        vocab_size: int = 250002,
+        gate_hidden: int = 256,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+    ):
+        """
+        Initialize context gate.
+
+        Args:
+            hidden_size: Transformer hidden dimension
+            vocab_size: Vocabulary size for gate output
+            gate_hidden: Hidden dimension for gate MLP
+            num_heads: Number of attention heads for context pooling
+            dropout: Dropout rate
+        """
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+
+        # Multi-head self-attention for context pooling
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+        # Learnable query for pooling
+        self.context_query = nn.Parameter(torch.randn(1, 1, hidden_size))
+
+        # Gate MLP: hidden_size -> gate_hidden -> vocab_size
+        self.gate_proj = nn.Sequential(
+            nn.Linear(hidden_size, gate_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(gate_hidden, vocab_size),
+            nn.Sigmoid(),  # Output in [0, 1]
+        )
+
+        # Layer norm for stability
+        self.layer_norm = nn.LayerNorm(hidden_size)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute context gate.
+
+        Args:
+            hidden_states: Transformer outputs [batch, seq_len, hidden]
+            attention_mask: Attention mask [batch, seq_len]
+
+        Returns:
+            gate: Context-dependent gate [batch, vocab_size]
+        """
+        batch_size = hidden_states.shape[0]
+
+        # Expand context query for batch
+        query = self.context_query.expand(batch_size, -1, -1)
+
+        # Create attention mask for multi-head attention
+        # True = masked (ignore), False = attend
+        key_padding_mask = (attention_mask == 0)
+
+        # Attention pooling: query attends to all hidden states
+        context, _ = self.attention(
+            query=query,
+            key=hidden_states,
+            value=hidden_states,
+            key_padding_mask=key_padding_mask,
+        )
+
+        # context: [batch, 1, hidden] -> [batch, hidden]
+        context = context.squeeze(1)
+        context = self.layer_norm(context)
+
+        # Project to vocab-sized gate
+        gate = self.gate_proj(context)  # [batch, vocab_size]
+
+        return gate
+
+
+class SPLADEDocContextGated(SPLADEDocXLMR):
+    """
+    Context-Gated SPLADE model for V28.
+
+    Extends SPLADEDocXLMR with a context gate that modulates
+    token activations based on document-level context.
+
+    This enables context-dependent sparse representations where
+    the same keyword activates different tokens based on context:
+    - "출근했는데 점심 메뉴" -> 회사, 직장인, 비빔밥
+    - "학교를 갔는데 점심 메뉴" -> 학생, 급식, 도시락
+
+    Architecture:
+        Input -> XLM-R -> MLM Logits
+                   |
+                   +-> Context Gate -> Gate [batch, vocab]
+                           |
+        Gated Logits = MLM Logits * Gate.unsqueeze(1)
+                           |
+        Sparse = max_pool(ReLU(log1p(Gated Logits)))
+    """
+
+    def __init__(
+        self,
+        model_name: str = "xlm-roberta-base",
+        dropout: float = 0.1,
+        use_mlm_head: bool = True,
+        gate_hidden: int = 256,
+        gate_heads: int = 4,
+    ):
+        """
+        Initialize context-gated SPLADE model.
+
+        Args:
+            model_name: XLM-RoBERTa model name
+            dropout: Dropout rate
+            use_mlm_head: Use MLM head for expansion
+            gate_hidden: Hidden dimension for context gate
+            gate_heads: Number of attention heads in context gate
+        """
+        super().__init__(
+            model_name=model_name,
+            dropout=dropout,
+            use_mlm_head=use_mlm_head,
+        )
+
+        # Context gate module
+        self.context_gate = ContextGate(
+            hidden_size=self.hidden_size,
+            vocab_size=self.vocab_size,
+            gate_hidden=gate_hidden,
+            num_heads=gate_heads,
+            dropout=dropout,
+        )
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass with context-gated sparse representations.
+
+        Args:
+            input_ids: Input token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            token_type_ids: Ignored (XLM-RoBERTa doesn't use token types)
+
+        Returns:
+            sparse_repr: Context-gated sparse representation [batch, vocab_size]
+            token_weights: Per-position importance [batch, seq_len]
+        """
+        # Get MLM logits from base model
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        logits = outputs.logits  # [batch, seq_len, vocab_size]
+        hidden_states = outputs.hidden_states[-1]  # [batch, seq_len, hidden]
+
+        # Compute context gate
+        gate = self.context_gate(hidden_states, attention_mask)  # [batch, vocab_size]
+
+        # Apply gate to logits (broadcast over sequence dimension)
+        # gated_logits[b, s, v] = logits[b, s, v] * gate[b, v]
+        gated_logits = logits * gate.unsqueeze(1)
+
+        # Standard sparsification
+        sparse_scores = torch.log1p(self.relu(gated_logits))
+
+        # Mask padding positions
+        mask = attention_mask.unsqueeze(-1).float()
+        sparse_scores = sparse_scores * mask
+
+        # Max pooling across sequence
+        sparse_repr, _ = sparse_scores.max(dim=1)  # [batch, vocab_size]
+
+        # Per-position weights for analysis
+        token_weights = sparse_scores.max(dim=-1).values  # [batch, seq_len]
+
+        return sparse_repr, token_weights
+
+    def get_context_gate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Get context gate values (for analysis/debugging).
+
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+
+        Returns:
+            gate: Context gate values [batch, vocab_size]
+        """
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        hidden_states = outputs.hidden_states[-1]
+
+        return self.context_gate(hidden_states, attention_mask)
+
+
 def load_splade_xlmr(
     checkpoint_path: str,
     model_name: str = "xlm-roberta-base",
@@ -395,6 +624,48 @@ def load_splade_xlmr(
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
     # Handle different checkpoint formats
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    model.load_state_dict(state_dict, strict=False)
+    model = model.to(device)
+    model.eval()
+
+    return model
+
+
+def load_splade_context_gated(
+    checkpoint_path: str,
+    model_name: str = "xlm-roberta-base",
+    gate_hidden: int = 256,
+    gate_heads: int = 4,
+    device: str = "cuda",
+) -> SPLADEDocContextGated:
+    """
+    Load trained context-gated SPLADE model from checkpoint.
+
+    Args:
+        checkpoint_path: Path to model checkpoint
+        model_name: Base model name
+        gate_hidden: Gate hidden dimension
+        gate_heads: Gate attention heads
+        device: Target device
+
+    Returns:
+        Loaded SPLADEDocContextGated model
+    """
+    model = SPLADEDocContextGated(
+        model_name=model_name,
+        gate_hidden=gate_hidden,
+        gate_heads=gate_heads,
+    )
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
     if "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     elif "state_dict" in checkpoint:

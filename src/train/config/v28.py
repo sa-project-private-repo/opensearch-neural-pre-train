@@ -1,162 +1,111 @@
 """
-V24 Configuration for XLM-RoBERTa SPLADE with BGE-M3 Teacher.
+V28 Configuration for XLM-RoBERTa SPLADE with Language Filtering and Context Gate.
 
-Key differences from V22:
-- XLM-RoBERTa base (250K vocab) instead of KoBERT (50K vocab)
-- BGE-M3 as teacher model for knowledge distillation
-- Rebalanced loss weights for stronger contrastive learning
-- Longer max_length (192 vs 128)
+V28a: Korean Language Filtering
+- Suppress non-Korean tokens (multilingual noise removal)
+- Fixed high penalty for non-Korean tokens (100.0)
+
+V28b: Context-Gated Sparse Expansion (CGSE)
+- Document context determines token activation
+- Same keyword in different contexts activates different tokens
 """
 
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
 
-from src.train.config.base import BaseConfig, DataConfig, LossConfig, ModelConfig, TrainingConfig
+from src.train.config.base import BaseConfig, DataConfig, TrainingConfig
 from src.train.config.v22 import CurriculumPhase
+from src.train.config.v24 import KDConfig, HardNegativeConfig, V24ModelConfig
+from src.train.config.v26 import V26LossConfig
 
 
 @dataclass
-class KDConfig:
-    """Knowledge distillation configuration."""
+class V28LossConfig(V26LossConfig):
+    """V28-specific loss configuration with language filtering and context gate."""
 
-    enabled: bool = True
-    """Whether to enable knowledge distillation."""
+    # ===== V28a: Language Filtering =====
+    enable_language_filtering: bool = True
+    """Enable Korean language token filtering."""
 
-    teacher_model: str = "BAAI/bge-m3"
-    """Teacher model for distillation."""
+    korean_token_penalty: float = 0.0
+    """Penalty for Korean tokens (0.0 = no penalty, preserve Korean)."""
 
-    teacher_max_length: int = 512
-    """Maximum sequence length for teacher encoding."""
+    non_korean_penalty: float = 100.0
+    """Penalty for non-Korean tokens (high = suppress non-Korean)."""
 
-    normalize_embeddings: bool = True
-    """Whether to L2 normalize teacher embeddings."""
+    lambda_language: float = 0.5
+    """Weight for language filtering penalty in total loss."""
 
-    warmup_epochs: int = 1
-    """Number of epochs before enabling KD."""
+    # ===== V28b: Context-Gated Expansion =====
+    use_context_gate: bool = True
+    """Enable context-gated sparse expansion."""
 
-    annealing_epochs: int = 20
-    """Number of epochs for KD weight annealing."""
+    context_gate_hidden: int = 256
+    """Hidden dimension for context gate MLP."""
 
+    context_attention_heads: int = 4
+    """Number of attention heads for context pooling."""
 
-@dataclass
-class HardNegativeConfig:
-    """Hard negative mining configuration."""
+    context_gate_dropout: float = 0.1
+    """Dropout rate for context gate layers."""
 
-    enabled: bool = True
-    """Whether to enable hard negative mining."""
+    # Context-aware KD
+    use_context_aware_kd: bool = True
+    """Enable context-aware knowledge distillation."""
 
-    bm25_negatives: int = 5
-    """Number of BM25-based negatives per sample."""
-
-    dense_negatives: int = 5
-    """Number of dense-based negatives per sample."""
-
-    refresh_every_n_epochs: int = 5
-    """Re-mine hard negatives every N epochs."""
-
-    mine_every_n_epochs: int = 3
-    """Mine new negatives every N epochs."""
-
-    num_hard_negatives: int = 5
-    """Number of hard negatives per sample."""
-
-    temperature: float = 0.1
-    """Temperature for hard negative sampling."""
+    context_kd_weight: float = 1.0
+    """Weight for context-aware KD loss."""
 
 
 @dataclass
-class V24ModelConfig(ModelConfig):
-    """V24-specific model configuration."""
+class V28ModelConfig(V24ModelConfig):
+    """V28-specific model configuration."""
 
-    name: str = "xlm-roberta-base"
-    """XLM-RoBERTa base model (250K vocab)."""
+    model_class: Literal["SPLADEDocXLMR", "SPLADEDocContextGated"] = "SPLADEDocContextGated"
+    """Model class to use (V28 uses context-gated variant)."""
 
-    model_class: Literal["SPLADEDocXLMR", "SPLADEDocXLMRWithIDF"] = "SPLADEDocXLMR"
-    """Model class to use."""
+    use_context_gate: bool = True
+    """Whether to use context-gated model."""
 
-    dropout: float = 0.1
-    """Dropout rate."""
+    context_gate_hidden: int = 256
+    """Hidden dimension for context gate."""
 
-    use_expansion: bool = True
-    """Use MLM head for vocabulary expansion."""
-
-    expansion_mode: Literal["mlm", "projection"] = "mlm"
-    """Expansion mode."""
+    context_attention_heads: int = 4
+    """Number of attention heads in context gate."""
 
 
 @dataclass
-class V24LossConfig(LossConfig):
-    """V24-specific loss configuration."""
-
-    # Rebalanced loss weights for XLM-R + BGE-M3
-    lambda_infonce: float = 3.0
-    """Stronger contrastive signal."""
-
-    lambda_self: float = 0.5
-    """Reduced self-reconstruction."""
-
-    lambda_positive: float = 2.0
-    """Balanced positive activation."""
-
-    lambda_margin: float = 0.0
-    """Disabled (redundant with InfoNCE)."""
-
-    lambda_flops: float = 0.002
-    """Allow more activations for 250K vocab."""
-
-    lambda_min_act: float = 1.0
-    """Activation floor."""
-
-    lambda_kd: float = 2.0
-    """Knowledge distillation weight."""
-
-    kd_temperature: float = 3.0
-    """KD temperature for soft labels."""
-
-    # Loss hyperparameters
-    temperature: float = 0.07
-    """InfoNCE temperature."""
-
-    margin: float = 0.3
-    """Cosine similarity margin."""
-
-    top_k: int = 5
-    """Top-k for minimum activation."""
-
-    min_activation: float = 0.5
-    """Minimum activation threshold."""
-
-    # IDF-aware FLOPS
-    use_idf_weighting: bool = True
-    """Enable IDF-aware penalty."""
-
-    idf_alpha: float = 2.5
-    """IDF exponential decay factor."""
-
-
-@dataclass
-class V24Config(BaseConfig):
+class V28Config(BaseConfig):
     """
-    V24 Configuration for XLM-RoBERTa SPLADE with BGE-M3 Teacher.
+    V28 Configuration for XLM-RoBERTa SPLADE with Language Filtering and Context Gate.
 
-    Key improvements over V22:
-    - XLM-RoBERTa backbone (250K vocab vs 50K)
-    - BGE-M3 teacher for knowledge distillation
-    - Stronger contrastive learning
-    - Hard negative mining support
+    Key improvements over V26/V27:
+    - V28a: Korean language filtering (suppress multilingual token leakage)
+    - V28b: Context-gated sparse expansion (context-dependent activation)
+
+    Architecture:
+        Document -> Transformer -> Hidden States
+                        |
+                 Context Pooling -> Context Vector [batch, hidden]
+                        |
+                   Context Gate (Linear + Sigmoid) -> [batch, vocab_size]
+                        |
+                 MLM Logits * Context Gate -> Gated Logits
+                        |
+                 ReLU + log(1+x) -> Max Pooling -> Sparse Vector
     """
 
-    # Override with V24-specific configs
-    model: V24ModelConfig = field(default_factory=V24ModelConfig)
-    """Model configuration."""
+    # Override with V28-specific configs
+    model: V28ModelConfig = field(default_factory=V28ModelConfig)
+    """Model configuration with context gate settings."""
 
-    loss: V24LossConfig = field(default_factory=V24LossConfig)
-    """Loss configuration."""
+    loss: V28LossConfig = field(default_factory=V28LossConfig)
+    """Loss configuration with language filtering."""
 
     data: DataConfig = field(default_factory=lambda: DataConfig(
-        train_files=["data/v22.0/train_*.jsonl", "data/v22.0/augmented_*.jsonl"],
-        val_files=["data/v22.0/val_*.jsonl"],
-        batch_size=48,
+        train_files=["data/v24.0/train_*.jsonl"],
+        val_files=["data/v24.0/val.jsonl"],
+        batch_size=24,
         max_length=192,
         num_workers=4,
     ))
@@ -168,10 +117,10 @@ class V24Config(BaseConfig):
         weight_decay=0.01,
         warmup_ratio=0.1,
         gradient_clip=1.0,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=4,
         mixed_precision="bf16",
-        output_dir="outputs/train_v24",
-        experiment_name="splade_v24_xlmr_bge",
+        output_dir="outputs/train_v28",
+        experiment_name="splade_v28_xlmr_context_gated",
     ))
     """Training configuration."""
 
@@ -192,13 +141,13 @@ class V24Config(BaseConfig):
 
     def __post_init__(self) -> None:
         """Initialize default curriculum phases if not provided."""
-        # Convert nested dicts to V24-specific dataclasses
+        # Convert nested dicts to V28-specific dataclasses
         if isinstance(self.model, dict):
-            self.model = V24ModelConfig(**self.model)
+            self.model = V28ModelConfig(**self.model)
         if isinstance(self.data, dict):
             self.data = DataConfig(**self.data)
         if isinstance(self.loss, dict):
-            self.loss = V24LossConfig(**self.loss)
+            self.loss = V28LossConfig(**self.loss)
         if isinstance(self.training, dict):
             self.training = TrainingConfig(**self.training)
         if isinstance(self.knowledge_distillation, dict):
@@ -248,7 +197,7 @@ class V24Config(BaseConfig):
                         "multi_term": 0.3,
                         "single_term": 0.2,
                     },
-                    description="Phase 3: Hard negative refinement",
+                    description="Phase 3: Hard negative refinement with context gate",
                 ),
             ]
 
@@ -290,17 +239,26 @@ class V24Config(BaseConfig):
             return phase.lr_multiplier
         return 1.0
 
+    def get_idf_cache_path(self) -> str:
+        """Get default IDF cache path based on output dir."""
+        if self.loss.idf_weights_path:
+            return self.loss.idf_weights_path
+        return f"{self.training.output_dir}/idf_weights/xlmr_v28_idf"
 
-def create_default_v24_config(
+
+def create_default_v28_config(
     train_files: Optional[List[str]] = None,
     val_files: Optional[List[str]] = None,
-    output_dir: str = "outputs/train_v24",
+    output_dir: str = "outputs/train_v28",
     model_name: str = "xlm-roberta-base",
-    batch_size: int = 48,
+    batch_size: int = 24,
     num_epochs: int = 25,
-) -> V24Config:
+    idf_weights_path: Optional[str] = None,
+    use_context_gate: bool = True,
+    enable_language_filtering: bool = True,
+) -> V28Config:
     """
-    Create a default V24 configuration.
+    Create a default V28 configuration.
 
     Args:
         train_files: Training data files
@@ -309,24 +267,25 @@ def create_default_v24_config(
         model_name: XLM-R model variant
         batch_size: Batch size
         num_epochs: Number of epochs
+        idf_weights_path: Path to pre-computed IDF weights
+        use_context_gate: Whether to use context-gated model
+        enable_language_filtering: Whether to enable Korean filtering
 
     Returns:
-        Configured V24Config instance
+        Configured V28Config instance
     """
     if train_files is None:
-        train_files = [
-            "data/v22.0/train_*.jsonl",
-            "data/v22.0/augmented_*.jsonl",
-        ]
+        train_files = ["data/v24.0/train_*.jsonl"]
     if val_files is None:
-        val_files = ["data/v22.0/val_*.jsonl"]
+        val_files = ["data/v24.0/val.jsonl"]
 
-    config = V24Config(
-        model=V24ModelConfig(
+    config = V28Config(
+        model=V28ModelConfig(
             name=model_name,
             dropout=0.1,
             use_expansion=True,
             expansion_mode="mlm",
+            use_context_gate=use_context_gate,
         ),
         data=DataConfig(
             train_files=train_files,
@@ -335,11 +294,16 @@ def create_default_v24_config(
             max_length=192,
             num_workers=4,
         ),
+        loss=V28LossConfig(
+            idf_weights_path=idf_weights_path,
+            enable_language_filtering=enable_language_filtering,
+            use_context_gate=use_context_gate,
+        ),
         training=TrainingConfig(
             num_epochs=num_epochs,
             learning_rate=3e-5,
             output_dir=output_dir,
-            experiment_name="splade_v24_xlmr_bge",
+            experiment_name="splade_v28_xlmr_context_gated",
         ),
     )
 
