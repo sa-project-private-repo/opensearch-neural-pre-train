@@ -2,6 +2,17 @@
 
 SPLADE (Sparse Lexical and Expansion) 모델의 학습 파이프라인과 전문가 분석 결과를 정리한 문서입니다.
 
+## Version History
+
+| Version | Key Features | Status |
+|---------|--------------|--------|
+| V22 | KoBERT backbone, curriculum learning | Completed |
+| V24 | XLM-RoBERTa + BGE-M3 teacher | Completed |
+| V25 | IDF-aware FLOPS | Completed |
+| V26 | Enhanced IDF + Special Token Fix | Completed |
+| V27 | Travel Domain Data | Training |
+| **V28** | **Korean Filter + Context Gate** | **Ready** |
+
 ## 1. Training Pipeline Overview
 
 ### 1.1 전체 학습 흐름
@@ -546,8 +557,104 @@ make logs-v22
 make tensorboard-v22
 ```
 
-## 10. References
+## 10. V28: Context-Gated Sparse Expansion
+
+### 10.1 V28 Architecture
+
+V28은 두 가지 핵심 개선을 포함합니다:
+
+#### V28a: Korean Language Filtering
+
+비한국어 토큰 억제를 통해 한국어 검색 정확도 향상:
+
+```python
+# SPLADELossV28
+class SPLADELossV28(SPLADELossV26):
+    def _compute_language_penalty(self, sparse_repr):
+        non_korean_activation = sparse_repr * self.non_korean_mask
+        return non_korean_activation.sum(dim=-1).mean()
+```
+
+| 설정 | 값 | 설명 |
+|------|-----|------|
+| `non_korean_penalty` | 100.0 | 비한국어 토큰 페널티 |
+| `lambda_language` | 0.5 | 언어 손실 가중치 |
+
+#### V28b: Context-Gated Sparse Expansion (CGSE)
+
+```mermaid
+flowchart TD
+    subgraph Input["Input"]
+        A[Document] --> B[Transformer]
+    end
+
+    subgraph ContextGate["Context Gate"]
+        B --> C[Hidden States]
+        C --> D[Multi-Head Attention Pooling]
+        D --> E[Context Vector]
+        E --> F[Gate Projection]
+        F --> G[Sigmoid Gate]
+    end
+
+    subgraph Output["Gated Output"]
+        B --> H[MLM Logits]
+        H --> I[Logits × Gate]
+        G --> I
+        I --> J[ReLU + log1p]
+        J --> K[Max Pooling]
+        K --> L[Sparse Vector]
+    end
+
+    style Input fill:#e1f5fe
+    style ContextGate fill:#fff3e0
+    style Output fill:#e8f5e9
+```
+
+**핵심 코드:**
+```python
+class ContextGate(nn.Module):
+    def __init__(self, hidden_size=768, vocab_size=250002, gate_hidden=256):
+        self.attention = nn.MultiheadAttention(hidden_size, num_heads=4)
+        self.gate_proj = nn.Sequential(
+            nn.Linear(hidden_size, gate_hidden),
+            nn.GELU(),
+            nn.Linear(gate_hidden, vocab_size),
+            nn.Sigmoid()
+        )
+
+    def forward(self, hidden_states, attention_mask):
+        context = self.attention_pool(hidden_states, attention_mask)
+        return self.gate_proj(context)
+```
+
+### 10.2 V28 성공 기준
+
+| 지표 | V26 현재 | V28 목표 |
+|------|----------|----------|
+| 한국어 토큰 비율 | ~10% | >85% |
+| 다국어 노이즈 | 91% | <5% |
+| 컨텍스트 구분율 | 0% | >60% |
+| Ko-StrategyQA Recall@1 | 30.4% | >40% |
+
+### 10.3 V28 학습 명령
+
+```bash
+# V28 학습
+make train-v28
+
+# V27 완료 후 자동 시작
+nohup ./scripts/run_v28_after_v27.sh > outputs/v28_auto.log 2>&1 &
+
+# 검증
+make eval-v28-language   # 한국어 토큰 비율
+make eval-v28-context    # 컨텍스트 구분율
+```
+
+---
+
+## 11. References
 
 - [SPLADE Paper (SIGIR 2021)](https://arxiv.org/abs/2107.05720)
 - [Inference-Free Sparse Retrievers (arXiv 2411.04403)](https://arxiv.org/abs/2411.04403)
 - [OpenSearch Neural Sparse](https://opensearch.org/docs/latest/search-plugins/neural-sparse-search/)
+- [V28 Experiment Document](./experiments/V28_EXPERIMENT.md)
