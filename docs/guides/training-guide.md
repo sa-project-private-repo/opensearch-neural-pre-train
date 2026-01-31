@@ -8,9 +8,10 @@ OpenSearch Neural Sparse Encoding 모델 학습 가이드
 2. [데이터 준비](#데이터-준비)
 3. [IDF 가중치 계산](#idf-가중치-계산)
 4. [Training 실행](#training-실행)
-5. [Max Length 192 제약](#max-length-192-제약)
-6. [Monitoring](#monitoring)
-7. [Troubleshooting](#troubleshooting)
+5. [버전별 학습](#버전별-학습)
+6. [Max Length 192 제약](#max-length-192-제약)
+7. [Monitoring](#monitoring)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -231,6 +232,66 @@ nohup tensorboard --logdir runs/v27.0 --port 6006 > tensorboard.log 2>&1 &
 torchrun --nproc_per_node=2 \
   -m src.train.cli.train_v27 \
   --config configs/train_v27.yaml
+```
+
+---
+
+## 버전별 학습
+
+### Version Overview
+
+| Version | Command | Key Features |
+|---------|---------|--------------|
+| V22 | `make train-v22` | KoBERT backbone, curriculum learning |
+| V24 | `make train-v24` | XLM-RoBERTa + BGE-M3 teacher |
+| V25 | `make train-v25` | IDF-aware FLOPS |
+| V26 | `make train-v26` | Enhanced IDF + Special Token Fix |
+| V27 | `make train-v27` | Travel Domain Data |
+| **V28** | `make train-v28` | **Korean Filter + Context Gate** |
+
+### V28 Training (Latest)
+
+V28은 두 가지 핵심 기능을 포함합니다:
+
+**V28a: Korean Language Filtering**
+- 비한국어 토큰 억제 (non_korean_penalty=100.0)
+- 목표: 한국어 토큰 비율 >85%
+
+**V28b: Context-Gated Sparse Expansion (CGSE)**
+- 문맥 의존적 토큰 활성화
+- Multi-head attention 기반 context pooling
+- 목표: 컨텍스트 구분율 >60%
+
+```bash
+# V28 학습
+make train-v28
+
+# V27 완료 후 자동 시작
+nohup ./scripts/run_v28_after_v27.sh > outputs/v28_auto.log 2>&1 &
+
+# V28 검증
+make eval-v28-language   # 한국어 토큰 비율
+make eval-v28-context    # 컨텍스트 구분율
+```
+
+### V28 Config 주요 설정
+
+```yaml
+# configs/train_v28.yaml
+model:
+  model_class: "SPLADEDocContextGated"
+  use_context_gate: true
+  context_gate_hidden: 256
+
+loss:
+  # Korean language filtering
+  enable_language_filtering: true
+  non_korean_penalty: 100.0
+  lambda_language: 0.5
+
+  # Context gate
+  use_context_gate: true
+  use_context_aware_kd: true
 ```
 
 ---
