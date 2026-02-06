@@ -18,15 +18,15 @@ class BenchmarkConfig:
     verify_certs: bool = True
 
     # Index names
-    bm25_index: str = "benchmark-bm25-v26"
-    dense_index: str = "benchmark-dense-v26"
-    sparse_index: str = "benchmark-sparse-v26"
-    hybrid_index: str = "benchmark-hybrid-v26"
+    bm25_index: str = "benchmark-bm25-v28"
+    dense_index: str = "benchmark-dense-v28"
+    sparse_index: str = "benchmark-sparse-v28"
+    hybrid_index: str = "benchmark-hybrid-v28"
 
     # Model paths
     bge_m3_model: str = "BAAI/bge-m3"
     neural_sparse_path: Path = field(
-        default_factory=lambda: Path("huggingface/v26")
+        default_factory=lambda: Path("huggingface/v29_v2")
     )
 
     # Data paths

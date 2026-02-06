@@ -1,0 +1,78 @@
+# V29 Training Configuration
+# SPLADE v2 improvements + AI Hub data integration
+#
+# Key Changes from V28:
+# - Max pooling (SPLADE v2 style) instead of sum pooling
+# - Separate FLOPS regularization for query/doc (lambda_flops_q, lambda_flops_d)
+# - AI Hub data integration for richer Korean corpus
+# - Optional Margin-MSE distillation
+#
+# Usage:
+#   python -m src.train v29 --config configs/train_v29.yaml
+#   make train-v29
+
+model:
+  name: "xlm-roberta-base"
+  model_class: "SPLADEDocV29ContextGated"
+  pooling: "max"  # V29: SPLADE v2 max pooling
+  dropout: 0.1
+  use_mlm_head: true
+  use_context_gate: true
+  context_gate_hidden: 256
+  context_attention_heads: 4
+
+loss:
+  # V28 settings (inherited)
+  enable_language_filtering: true
+  non_korean_penalty: 5.0
+  lambda_language: 0.3
+
+  # Standard loss weights
+  lambda_infonce: 2.5
+  lambda_self: 0.5
+  lambda_positive: 2.0
+  lambda_margin: 0.0
+  lambda_min_act: 1.0
+  lambda_kd: 2.0
+
+  # V29: Separate FLOPS regularization
+  lambda_flops_q: 0.0001
+  lambda_flops_d: 0.001
+  lambda_warmup_steps: 50000
+
+  # V29: Margin-MSE distillation (optional)
+  use_margin_mse: false
+
+  # Stopword handling
+  use_stopword_mask: true
+  stopword_penalty: 15.0
+
+  temperature: 0.07
+
+training:
+  num_epochs: 15
+  batch_size: 32
+  learning_rate: 0.00002
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 2
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v29"
+  experiment_name: "splade_v29_xlmr_spladev2"
+  log_every_n_steps: 50
+  save_every_n_epochs: 3
+
+data:
+  train_files:
+    - "data/v24.0/train_*.jsonl"
+    - "data/aihub/processed/*.jsonl"
+  val_files:
+    - "data/v24.0/val.jsonl"
+  max_length: 256
+  num_workers: 4
+
+# DDP settings
+ddp:
+  enabled: true
+  num_gpus: 8

@@ -7,6 +7,9 @@ from src.preprocessing.converters.qa_converter import QAConverter
 from src.preprocessing.converters.classification_converter import ClassificationConverter
 from src.preprocessing.converters.dialog_converter import DialogConverter
 from src.preprocessing.converters.travel import TravelConverter, TravelTourismConverter
+from src.preprocessing.converters.aihub_web_corpus import AIHubWebCorpusConverter
+from src.preprocessing.converters.aihub_emotion import AIHubEmotionConverter
+from src.preprocessing.converters.aihub_ai_instructor import AIHubAIInstructorConverter
 
 __all__ = [
     "BaseConverter",
@@ -18,6 +21,9 @@ __all__ = [
     "DialogConverter",
     "TravelConverter",
     "TravelTourismConverter",
+    "AIHubWebCorpusConverter",
+    "AIHubEmotionConverter",
+    "AIHubAIInstructorConverter",
 ]
 
 # Registry mapping dataset names to converters
@@ -33,6 +39,9 @@ CONVERTER_REGISTRY = {
     "persona_chat": DialogConverter,
     "travel": TravelConverter,
     "travel_tourism": TravelTourismConverter,
+    "aihub_624": AIHubWebCorpusConverter,
+    "aihub_86": AIHubEmotionConverter,
+    "aihub_71828": AIHubAIInstructorConverter,
 }
 
 

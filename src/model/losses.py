@@ -1931,3 +1931,231 @@ class SPLADELossV28(SPLADELossV26):
     def update_language_weight(self, lambda_language: float) -> None:
         """Update language filtering weight."""
         self.lambda_language = lambda_language
+
+
+class SPLADELossV29(SPLADELossV28):
+    """
+    SPLADE loss v29 with SPLADE v2 style FLOPS regularization.
+
+    Key improvements over V28:
+    - Separate FLOPS regularization for query (lambda_q) and document (lambda_d)
+    - Quadratic lambda warmup support via external scheduler
+    - Margin-MSE distillation support from cross-encoder
+
+    Based on SPLADE v2 paper (Formal et al., 2022):
+    - L_FLOPS = sum_j (1/N * sum_i w_j^(d_i))^2
+    - L = L_rank + λ_q * L_reg^q + λ_d * L_reg^d
+    """
+
+    def __init__(
+        self,
+        idf_weights: torch.Tensor,
+        special_token_ids: set,
+        # V29: Separate FLOPS weights
+        lambda_flops_q: float = 1e-4,
+        lambda_flops_d: float = 1e-3,
+        # V29: Distillation
+        use_margin_mse: bool = False,
+        # Inherited from V28
+        korean_token_ids: Optional[set] = None,
+        lambda_language: float = 0.3,
+        non_korean_penalty: float = 5.0,
+        korean_penalty: float = 0.0,
+        enable_language_filtering: bool = True,
+        # Standard loss weights
+        lambda_infonce: float = 3.0,
+        lambda_self: float = 0.5,
+        lambda_positive: float = 2.0,
+        lambda_margin: float = 0.0,
+        lambda_flops: float = 0.0,  # Disabled, use lambda_flops_q/d instead
+        lambda_min_act: float = 1.0,
+        lambda_kd: float = 2.0,
+        # Hyperparameters
+        temperature: float = 0.07,
+        margin: float = 0.3,
+        top_k: int = 5,
+        min_activation: float = 0.5,
+        kd_temperature: float = 3.0,
+        # IDF configuration
+        idf_alpha: float = 4.0,
+        special_penalty: float = 100.0,
+        # Stopword masking
+        stopword_mask: Optional[torch.Tensor] = None,
+        stopword_penalty: float = 15.0,
+        # Teacher model
+        teacher_model: Optional[DenseTeacherScorer] = None,
+    ):
+        """
+        Initialize SPLADE v29 loss with separate FLOPS regularization.
+
+        Args:
+            idf_weights: Pre-computed IDF weights [vocab_size]
+            special_token_ids: Set of special token IDs
+            lambda_flops_q: FLOPS regularization weight for queries
+            lambda_flops_d: FLOPS regularization weight for documents
+            use_margin_mse: Use margin-MSE distillation from cross-encoder
+            Other args: Inherited from SPLADELossV28
+        """
+        super().__init__(
+            idf_weights=idf_weights,
+            special_token_ids=special_token_ids,
+            korean_token_ids=korean_token_ids,
+            lambda_language=lambda_language,
+            non_korean_penalty=non_korean_penalty,
+            korean_penalty=korean_penalty,
+            enable_language_filtering=enable_language_filtering,
+            lambda_infonce=lambda_infonce,
+            lambda_self=lambda_self,
+            lambda_positive=lambda_positive,
+            lambda_margin=lambda_margin,
+            lambda_flops=lambda_flops,  # Will be 0, handled separately
+            lambda_min_act=lambda_min_act,
+            lambda_kd=lambda_kd,
+            temperature=temperature,
+            margin=margin,
+            top_k=top_k,
+            min_activation=min_activation,
+            kd_temperature=kd_temperature,
+            idf_alpha=idf_alpha,
+            special_penalty=special_penalty,
+            stopword_mask=stopword_mask,
+            stopword_penalty=stopword_penalty,
+            teacher_model=teacher_model,
+        )
+
+        # V29 specific
+        self.lambda_flops_q = lambda_flops_q
+        self.lambda_flops_d = lambda_flops_d
+        self.use_margin_mse = use_margin_mse
+
+    def _compute_flops_v29(self, sparse_repr: torch.Tensor) -> torch.Tensor:
+        """
+        Compute SPLADE v2 style FLOPS regularization WITH IDF weighting.
+
+        L_FLOPS = sum_j w_j * (mean_activation_j)^2
+
+        Uses penalty_weights from parent class flops_loss which includes:
+        - IDF-based weighting (lower IDF = higher penalty for common tokens)
+        - Special token penalty (100x for <s>, </s>, etc.)
+        - Stopword penalty (15x for Korean stopwords)
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            FLOPS regularization loss (weighted)
+        """
+        # Average activation per token across batch
+        mean_activation = sparse_repr.mean(dim=0)  # [vocab_size]
+
+        # Get penalty weights from parent class (includes IDF + special token penalties)
+        penalty_weights = self.flops_loss.penalty_weights
+
+        # Weighted FLOPS: w_j * a_j^2 (linear penalty, not quadratic)
+        flops_loss = (penalty_weights * (mean_activation ** 2)).sum()
+
+        return flops_loss
+
+    def _compute_margin_mse(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        teacher_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute margin-MSE distillation loss.
+
+        Args:
+            anchor_repr: Query representations [batch, vocab]
+            positive_repr: Positive document representations [batch, vocab]
+            negative_repr: Negative document representations [batch, vocab]
+            teacher_scores: Teacher scores [batch, 2] (pos_score, neg_score)
+
+        Returns:
+            Margin-MSE loss
+        """
+        # Student scores (dot product)
+        student_pos = (anchor_repr * positive_repr).sum(dim=-1)
+        student_neg = (anchor_repr * negative_repr).sum(dim=-1)
+        student_margin = student_pos - student_neg
+
+        # Teacher margin
+        teacher_margin = teacher_scores[:, 0] - teacher_scores[:, 1]
+
+        # MSE on margins
+        margin_mse = F.mse_loss(student_margin, teacher_margin)
+
+        return margin_mse
+
+    def forward(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        anchor_input_ids: torch.Tensor,
+        anchor_attention_mask: torch.Tensor,
+        positive_input_ids: torch.Tensor,
+        positive_attention_mask: torch.Tensor,
+        anchor_texts: Optional[list] = None,
+        positive_texts: Optional[list] = None,
+        teacher_scores: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Compute combined loss with V29 FLOPS regularization.
+
+        Args:
+            anchor_repr: Query sparse representations [batch_size, vocab_size]
+            positive_repr: Positive doc sparse representations [batch_size, vocab_size]
+            negative_repr: Negative doc sparse representations [batch_size, vocab_size]
+            anchor_input_ids: Query token IDs
+            anchor_attention_mask: Query attention mask
+            positive_input_ids: Positive token IDs
+            positive_attention_mask: Positive attention mask
+            anchor_texts: Raw query texts for teacher scoring
+            positive_texts: Raw positive texts for teacher scoring
+            teacher_scores: Pre-computed teacher scores [batch, 2]
+
+        Returns:
+            total_loss: Combined loss value
+            loss_dict: Dictionary with individual loss components
+        """
+        # Get V28 base losses (with lambda_flops=0)
+        total_loss, loss_dict = super().forward(
+            anchor_repr=anchor_repr,
+            positive_repr=positive_repr,
+            negative_repr=negative_repr,
+            anchor_input_ids=anchor_input_ids,
+            anchor_attention_mask=anchor_attention_mask,
+            positive_input_ids=positive_input_ids,
+            positive_attention_mask=positive_attention_mask,
+            anchor_texts=anchor_texts,
+            positive_texts=positive_texts,
+            teacher_scores=teacher_scores if not self.use_margin_mse else None,
+        )
+
+        # V29: Separate FLOPS for query and document
+        flops_q = self._compute_flops_v29(anchor_repr)
+        flops_d = self._compute_flops_v29(positive_repr) + self._compute_flops_v29(negative_repr)
+
+        flops_loss = self.lambda_flops_q * flops_q + self.lambda_flops_d * flops_d
+        total_loss = total_loss + flops_loss
+
+        loss_dict["flops_q"] = flops_q.item()
+        loss_dict["flops_d"] = flops_d.item()
+        loss_dict["flops_total"] = flops_loss.item()
+
+        # V29: Margin-MSE distillation
+        if self.use_margin_mse and teacher_scores is not None:
+            margin_mse = self._compute_margin_mse(
+                anchor_repr, positive_repr, negative_repr, teacher_scores
+            )
+            total_loss = total_loss + self.lambda_kd * margin_mse
+            loss_dict["margin_mse"] = margin_mse.item()
+
+        return total_loss, loss_dict
+
+    def update_lambda_flops(self, lambda_q: float, lambda_d: float) -> None:
+        """Update FLOPS regularization weights (for warmup scheduler)."""
+        self.lambda_flops_q = lambda_q
+        self.lambda_flops_d = lambda_d

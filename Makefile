@@ -12,7 +12,9 @@
 	collect-travel prepare-v27-data train-v27 train-v27-bg train-v27-resume \
 	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline \
 	build-korean-tokens train-v28 train-v28-bg train-v28-resume train-v28-after-v27 train-v28a \
-	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline
+	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline \
+	prepare-v29-aihub download-aihub-data prepare-v29-data train-v29 train-v29-ddp train-v29-bg train-v29-resume \
+	eval-v29 eval-v29-sparsity convert-v29-hf logs-v29 tensorboard-v29 v29-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -31,6 +33,7 @@ CONFIG_V24 := configs/train_v24.yaml
 CONFIG_V25 := configs/train_v25.yaml
 CONFIG_V26 := configs/train_v26.yaml
 CONFIG_V27 := configs/train_v27.yaml
+CONFIG_V29 := configs/train_v29.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
@@ -41,6 +44,7 @@ OUTPUT_V24 := outputs/train_v24
 OUTPUT_V25 := outputs/train_v25
 OUTPUT_V26 := outputs/train_v26
 OUTPUT_V27 := outputs/train_v27
+OUTPUT_V29 := outputs/train_v29
 
 # V25 specific directories
 IDF_WEIGHTS_DIR := outputs/idf_weights
@@ -56,6 +60,11 @@ V26_HF_DIR := huggingface/v26
 V27_DATA_DIR := data/v27.0
 V27_CHECKPOINT_DIR := checkpoints/v27.0
 V27_HF_DIR := huggingface/v27
+
+# V29 specific directories
+V29_DATA_DIR := data/v29.0
+V29_CHECKPOINT_DIR := checkpoints/v29.0
+V29_HF_DIR := huggingface/v29
 
 # Colors for output
 BLUE := \033[0;34m
@@ -780,6 +789,136 @@ v28-pipeline: ## Run full V28 pipeline (build tokens -> train -> eval)
 	@echo "To start training:"
 	@echo "  make train-v28-bg    (background)"
 	@echo "  make train-v28       (foreground)"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
+##@ V29 SPLADE v2 Training Pipeline
+
+download-aihub-data: ## Download AI Hub datasets (624, 86, 71828)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Downloading AI Hub Datasets$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(YELLOW)Datasets:$(NC)"
+	@echo "  - 624: Web corpus (9.6GB)"
+	@echo "  - 86: Emotion dialog (20.3MB)"
+	@echo "  - 71828: AI instructor (5.66GB)"
+	@echo ""
+	@chmod +x scripts/download_aihub_data.sh
+	@./scripts/download_aihub_data.sh
+	@echo "$(GREEN)✓ AI Hub data downloaded$(NC)"
+
+prepare-v29-aihub: ## Convert AI Hub data to training format
+	@echo "$(BLUE)Converting AI Hub data to triplets...$(NC)"
+	@mkdir -p data/aihub/processed
+	@$(PYTHON) -m src.preprocessing.convert_aihub \
+		--input-dir data/aihub \
+		--output-dir data/aihub/processed
+	@echo "$(GREEN)✓ AI Hub data converted$(NC)"
+
+prepare-v29-data: download-aihub-data prepare-v29-aihub ## Prepare all V29 data
+	@echo "$(GREEN)✓ V29 data preparation complete$(NC)"
+
+train-v29: ## V29 training with SPLADE v2 improvements
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V29 SPLADE v2 Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V29)"
+	@echo "Output: $(OUTPUT_V29)"
+	@echo ""
+	@echo "$(YELLOW)V29 Key Features:$(NC)"
+	@echo "  - Max pooling (SPLADE v2)"
+	@echo "  - Separate FLOPS (lambda_q, lambda_d)"
+	@echo "  - AI Hub data integration"
+	@echo ""
+	@echo "$(YELLOW)Expected Results:$(NC)"
+	@echo "  - Recall@1 > 45%"
+	@echo "  - Korean ratio > 90%"
+	@echo "  - ~100 active tokens (more sparse)"
+	@echo ""
+	@$(PYTHON) -m src.train v29 --config $(CONFIG_V29)
+
+train-v29-ddp: ## V29 DDP training on 8x GPUs
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V29 Multi-GPU DDP Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "GPUs: 8x A100"
+	@echo "Config: $(CONFIG_V29)"
+	@echo "Output: $(OUTPUT_V29)"
+	@echo ""
+	@torchrun --nproc_per_node=8 -m src.train.cli.train_v29_ddp
+
+train-v29-bg: ## V29 training in background (nohup)
+	@echo "$(BLUE)Starting V29 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V29)
+	@nohup torchrun --nproc_per_node=8 -m src.train.cli.train_v29_ddp > $(OUTPUT_V29)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "Log: $(OUTPUT_V29)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v29"
+	@echo "  make tensorboard-v29"
+
+train-v29-resume: ## Resume V29 training from checkpoint
+	@echo "$(BLUE)Resuming V29 training from checkpoint...$(NC)"
+	@torchrun --nproc_per_node=8 -m src.train.cli.train_v29_ddp --resume
+
+eval-v29: ## Evaluate V29 model
+	@echo "$(BLUE)Evaluating V29 model...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V29_HF_DIR)/best \
+		--num-samples 100
+
+eval-v29-sparsity: ## Analyze V29 sparsity
+	@echo "$(BLUE)V29 Sparsity Analysis...$(NC)"
+	@$(PYTHON) scripts/quick_eval.py \
+		--model $(V29_HF_DIR)/best \
+		--sparsity-only
+
+convert-v29-hf: ## Convert V29 checkpoint to HuggingFace format
+	@echo "$(BLUE)Converting V29 checkpoint to HuggingFace format...$(NC)"
+	@mkdir -p $(V29_HF_DIR)
+	@$(PYTHON) scripts/convert_checkpoint_to_hf.py \
+		--checkpoint $(OUTPUT_V29)/best_model \
+		--output $(V29_HF_DIR) \
+		--model-class SPLADEDocV29ContextGated
+	@echo "$(GREEN)✓ Converted to $(V29_HF_DIR)$(NC)"
+
+logs-v29: ## Show V29 training logs
+	@echo "$(BLUE)V29 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V29)/training.log ]; then \
+		tail -f $(OUTPUT_V29)/training.log; \
+	elif [ -f $(OUTPUT_V29)/nohup.out ]; then \
+		tail -f $(OUTPUT_V29)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training with: make train-v29$(NC)"; \
+	fi
+
+tensorboard-v29: ## Start TensorBoard for V29 training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V29)/tensorboard --port 6006
+
+v29-pipeline: ## Run full V29 pipeline (data -> train -> eval)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V29 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)V29 = V28 + SPLADE v2 improvements + AI Hub data$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Download AI Hub data"
+	@echo "  2. Convert to triplets"
+	@echo "  3. Train with max pooling"
+	@echo "  4. Evaluate"
+	@echo ""
+	@echo "$(BLUE)[1/2]$(NC) Preparing data..."
+	@$(MAKE) prepare-v29-data
+	@echo ""
+	@echo "$(YELLOW)Data ready.$(NC)"
+	@echo "To start training:"
+	@echo "  make train-v29-ddp   (multi-GPU)"
+	@echo "  make train-v29-bg    (background)"
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
 
