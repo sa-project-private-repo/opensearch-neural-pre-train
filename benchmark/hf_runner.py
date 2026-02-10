@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from tqdm import tqdm
 
 from benchmark.config import BenchmarkConfig
-from benchmark.encoders import create_encoders
+from benchmark.encoders import create_encoders, create_encoders_v29, create_encoders_v30
 from benchmark.hf_data_loader import MTEBBenchmarkData, load_hf_dataset
 from benchmark.index_manager import IndexManager
 from benchmark.metrics import BenchmarkMetrics, QueryResult, compute_metrics, paired_t_test
@@ -50,7 +50,7 @@ class HFBenchmarkRunner:
 
         # Load encoders
         logger.info("Loading encoders...")
-        self.dense_encoder, self.sparse_encoder = create_encoders(self.config)
+        self.dense_encoder, self.sparse_encoder = create_encoders_v30(self.config)
 
         # Load HuggingFace dataset
         logger.info(f"Loading {self.dataset_name} dataset...")
@@ -353,7 +353,7 @@ def main():
         else:
             logger.info("Loading encoders (skip-setup mode)...")
             runner.index_manager = IndexManager(config)
-            runner.dense_encoder, runner.sparse_encoder = create_encoders(config)
+            runner.dense_encoder, runner.sparse_encoder = create_encoders_v29(config)
             runner.data = load_hf_dataset(args.dataset, args.max_queries)
 
         runner.run_benchmark(include_hybrid=True, methods=args.methods)

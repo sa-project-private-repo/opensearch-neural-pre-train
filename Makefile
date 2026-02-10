@@ -14,7 +14,8 @@
 	build-korean-tokens train-v28 train-v28-bg train-v28-resume train-v28-after-v27 train-v28a \
 	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline \
 	prepare-v29-aihub download-aihub-data prepare-v29-data train-v29 train-v29-ddp train-v29-bg train-v29-resume \
-	eval-v29 eval-v29-sparsity convert-v29-hf logs-v29 tensorboard-v29 v29-pipeline
+	eval-v29 eval-v29-sparsity convert-v29-hf logs-v29 tensorboard-v29 v29-pipeline \
+	mine-v30-negatives train-v30-ddp train-v30-bg train-v30-resume benchmark-v30-ko-strategyqa logs-v30 v30-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -65,6 +66,13 @@ V27_HF_DIR := huggingface/v27
 V29_DATA_DIR := data/v29.0
 V29_CHECKPOINT_DIR := checkpoints/v29.0
 V29_HF_DIR := huggingface/v29
+
+# V30 specific directories
+V30_DATA_DIR := data/v30.0
+V30_CHECKPOINT_DIR := checkpoints/v30.0
+V30_HF_DIR := huggingface/v30
+CONFIG_V30 := configs/train_v30.yaml
+OUTPUT_V30 := outputs/train_v30_ddp
 
 # Colors for output
 BLUE := \033[0;34m
@@ -919,6 +927,87 @@ v29-pipeline: ## Run full V29 pipeline (data -> train -> eval)
 	@echo "To start training:"
 	@echo "  make train-v29-ddp   (multi-GPU)"
 	@echo "  make train-v29-bg    (background)"
+	@echo ""
+	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
+##@ V30 Simplified SPLADE Training Pipeline
+
+mine-v30-negatives: ## Mine hard negatives for AI Hub data
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Mining Hard Negatives for AI Hub Data$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) scripts/mine_aihub_negatives.py \
+		--input_dir data/aihub/processed \
+		--output_dir data/aihub/processed \
+		--batch_size 64 \
+		--chunk_size 50000
+	@echo "$(GREEN)✓ Hard negative mining complete$(NC)"
+
+train-v30-ddp: ## V30 DDP training (simplified SPLADE, no context gate)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V30 Multi-GPU DDP Training$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "GPUs: 8x A100"
+	@echo "Output: $(OUTPUT_V30)"
+	@echo ""
+	@echo "$(YELLOW)V30 Key Fixes over V29:$(NC)"
+	@echo "  - Explicit hard negative encoding (V29 ignored them)"
+	@echo "  - Simplified loss (4 components vs V29's 8+)"
+	@echo "  - No context gate (back to proven V26 architecture)"
+	@echo "  - Max pooling (SPLADE v2 standard)"
+	@echo ""
+	@torchrun --nproc_per_node=8 -m src.train.cli.train_v30_ddp
+
+train-v30-bg: ## V30 training in background (nohup)
+	@echo "$(BLUE)Starting V30 training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V30)
+	@nohup torchrun --nproc_per_node=8 -m src.train.cli.train_v30_ddp > $(OUTPUT_V30)/nohup.out 2>&1 &
+	@echo "$(GREEN)Training started in background$(NC)"
+	@sleep 1
+	@echo "Log: $(OUTPUT_V30)/nohup.out"
+
+train-v30-resume: ## Resume V30 training from checkpoint
+	@echo "$(BLUE)Resuming V30 training from checkpoint...$(NC)"
+	@torchrun --nproc_per_node=8 -m src.train.cli.train_v30_ddp --resume
+
+benchmark-v30-ko-strategyqa: ## Run V30 benchmark on Ko-StrategyQA
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V30 Ko-StrategyQA Benchmark$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@$(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--output-dir outputs/benchmark_v30 \
+		--index-suffix v30 \
+		--cleanup
+
+logs-v30: ## Show V30 training logs
+	@echo "$(BLUE)V30 Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V30)/training.log ]; then \
+		tail -f $(OUTPUT_V30)/training.log; \
+	elif [ -f $(OUTPUT_V30)/nohup.out ]; then \
+		tail -f $(OUTPUT_V30)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training with: make train-v30-ddp$(NC)"; \
+	fi
+
+v30-pipeline: ## Run full V30 pipeline (mine negatives -> train -> benchmark)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V30 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)V30 fixes V29 0% recall by:$(NC)"
+	@echo "  1. Mining hard negatives for AI Hub data"
+	@echo "  2. Using explicit negatives in training"
+	@echo "  3. Simplified 4-component loss"
+	@echo "  4. No context gate (plain SPLADE)"
+	@echo ""
+	@echo "$(BLUE)[1/3]$(NC) Mining hard negatives..."
+	@$(MAKE) mine-v30-negatives
+	@echo ""
+	@echo "$(YELLOW)Negatives mined.$(NC)"
+	@echo "To start training:"
+	@echo "  make train-v30-ddp   (multi-GPU foreground)"
+	@echo "  make train-v30-bg    (background)"
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
 
