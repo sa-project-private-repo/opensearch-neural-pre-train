@@ -622,7 +622,7 @@ class ContextGate(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, hidden_states, attention_mask):
+    def forward(self, hidden_states, attention_mask): 
         context = self.attention_pool(hidden_states, attention_mask)
         return self.gate_proj(context)
 ```

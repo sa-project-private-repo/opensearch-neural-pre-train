@@ -18,13 +18,14 @@ from transformers import AutoTokenizer
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.model.splade_xlmr import SPLADEDocXLMR
+from src.model.splade_xlmr import SPLADEDocXLMR, SPLADEDocContextGated
 
 
 def convert_checkpoint(
     checkpoint_path: str,
     output_path: str,
     model_name: str = "xlm-roberta-base",
+    model_class: str = "SPLADEDocXLMR",
 ) -> None:
     """
     Convert training checkpoint to HuggingFace format.
@@ -50,7 +51,11 @@ def convert_checkpoint(
     print(f"Loading checkpoint: {model_file}")
 
     # Create model and load state dict
-    model = SPLADEDocXLMR(model_name=model_name, use_mlm_head=True)
+    if model_class == "SPLADEDocContextGated":
+        model = SPLADEDocContextGated(model_name=model_name, use_mlm_head=True)
+    else:
+        model = SPLADEDocXLMR(model_name=model_name, use_mlm_head=True)
+
     state_dict = torch.load(model_file, map_location="cpu")
     model.load_state_dict(state_dict)
     print(f"Loaded model with {sum(p.numel() for p in model.parameters()):,} parameters")
@@ -120,9 +125,15 @@ def main():
         default="xlm-roberta-base",
         help="Base model name (default: xlm-roberta-base)"
     )
+    parser.add_argument(
+        "--model-class",
+        default="SPLADEDocXLMR",
+        choices=["SPLADEDocXLMR", "SPLADEDocContextGated"],
+        help="Model class (default: SPLADEDocXLMR)"
+    )
 
     args = parser.parse_args()
-    convert_checkpoint(args.checkpoint, args.output, args.model_name)
+    convert_checkpoint(args.checkpoint, args.output, args.model_name, args.model_class)
 
 
 if __name__ == "__main__":

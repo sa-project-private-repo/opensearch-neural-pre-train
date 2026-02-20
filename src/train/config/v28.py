@@ -30,11 +30,34 @@ class V28LossConfig(V26LossConfig):
     korean_token_penalty: float = 0.0
     """Penalty for Korean tokens (0.0 = no penalty, preserve Korean)."""
 
-    non_korean_penalty: float = 100.0
-    """Penalty for non-Korean tokens (high = suppress non-Korean)."""
+    non_korean_penalty: float = 1.0
+    """Penalty for non-Korean tokens (soft nudge, not death sentence)."""
 
-    lambda_language: float = 0.5
+    lambda_language: float = 0.1
     """Weight for language filtering penalty in total loss."""
+
+    lambda_min_act: float = 5.0
+    """Must dominate language penalty to prevent collapse."""
+
+    top_k: int = 10
+    """Monitor more activation tokens."""
+
+    min_activation: float = 1.0
+    """Higher floor prevents collapse."""
+
+    # Language penalty warmup
+    language_warmup_steps: int = 5000
+    """Steps to linearly warmup language penalty from 0."""
+
+    language_penalty_max: float = 0.1
+    """Maximum lambda_language after warmup."""
+
+    # Collapse detection
+    collapse_flops_threshold: float = 0.01
+    """FLOPS below this for N checks triggers collapse guard."""
+
+    collapse_check_window: int = 3
+    """Consecutive low-flops checks before halving penalty."""
 
     # ===== V28b: Context-Gated Expansion =====
     use_context_gate: bool = True

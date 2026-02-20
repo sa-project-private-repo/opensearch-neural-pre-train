@@ -1708,23 +1708,29 @@ class SPLADELossV28(SPLADELossV26):
         special_token_ids: set,
         # V28: Language filtering
         korean_token_ids: Optional[set] = None,
-        lambda_language: float = 0.5,
-        non_korean_penalty: float = 100.0,
+        lambda_language: float = 0.1,
+        non_korean_penalty: float = 1.0,
         korean_penalty: float = 0.0,
         enable_language_filtering: bool = True,
+        # Language penalty warmup
+        language_warmup_steps: int = 5000,
+        language_penalty_max: float = 0.1,
+        # Collapse detection
+        collapse_flops_threshold: float = 0.01,
+        collapse_check_window: int = 3,
         # Loss weights (inherit V26 defaults)
         lambda_infonce: float = 3.0,
         lambda_self: float = 0.5,
         lambda_positive: float = 2.0,
         lambda_margin: float = 0.0,
         lambda_flops: float = 0.010,
-        lambda_min_act: float = 1.0,
+        lambda_min_act: float = 5.0,
         lambda_kd: float = 2.0,
         # Hyperparameters
         temperature: float = 0.07,
         margin: float = 0.3,
-        top_k: int = 5,
-        min_activation: float = 0.5,
+        top_k: int = 10,
+        min_activation: float = 1.0,
         kd_temperature: float = 3.0,
         # IDF configuration
         idf_alpha: float = 4.0,
@@ -1739,14 +1745,17 @@ class SPLADELossV28(SPLADELossV26):
         Initialize SPLADE v28 loss with language filtering.
 
         Args:
-            idf_weights: Pre-computed IDF weights [vocab_size] - REQUIRED
+            idf_weights: Pre-computed IDF weights [vocab_size]
             special_token_ids: Set of special token IDs
-            korean_token_ids: Set of Korean token IDs for language filtering
+            korean_token_ids: Korean token IDs for filtering
             lambda_language: Weight for language filtering loss
-            non_korean_penalty: Penalty for non-Korean token activation
-            korean_penalty: Penalty for Korean token activation (0 = no penalty)
-            enable_language_filtering: Whether to apply language filtering
-            Other args: Inherited from SPLADELossV26
+            non_korean_penalty: Penalty for non-Korean tokens
+            korean_penalty: Penalty for Korean tokens (0 = none)
+            enable_language_filtering: Apply language filtering
+            language_warmup_steps: Steps to warmup penalty
+            language_penalty_max: Max lambda_language after warmup
+            collapse_flops_threshold: FLOPS below this = collapse
+            collapse_check_window: Consecutive checks for guard
         """
         super().__init__(
             idf_weights=idf_weights,
@@ -1777,10 +1786,25 @@ class SPLADELossV28(SPLADELossV26):
         self.korean_penalty = korean_penalty
         self.korean_token_ids = korean_token_ids or set()
 
+        # V28: Language penalty warmup
+        self.language_warmup_steps = language_warmup_steps
+        self.language_penalty_max = language_penalty_max
+        self._global_step = 0
+
+        # V28: Collapse detection
+        self.collapse_flops_threshold = collapse_flops_threshold
+        self.collapse_check_window = collapse_check_window
+        self._low_flops_count = 0
+        self._collapse_halvings = 0
+
         # Build non-Korean mask for penalty computation
         if enable_language_filtering and korean_token_ids:
-            self._non_korean_mask = self._build_non_korean_mask(idf_weights.shape[0])
-            self.register_buffer("non_korean_mask", self._non_korean_mask)
+            self._non_korean_mask = self._build_non_korean_mask(
+                idf_weights.shape[0]
+            )
+            self.register_buffer(
+                "non_korean_mask", self._non_korean_mask
+            )
         else:
             self.non_korean_mask = None
 
@@ -1853,6 +1877,35 @@ class SPLADELossV28(SPLADELossV26):
 
         return korean_mean / non_korean_mean
 
+    def _get_effective_lambda_language(self) -> float:
+        """Get warmup-scaled language penalty weight."""
+        if self._global_step >= self.language_warmup_steps:
+            return self.language_penalty_max
+        ratio = self._global_step / max(self.language_warmup_steps, 1)
+        return self.language_penalty_max * ratio
+
+    def _check_collapse(self, flops: float) -> None:
+        """Check for training collapse and auto-reduce penalty."""
+        if flops < self.collapse_flops_threshold:
+            self._low_flops_count += 1
+        else:
+            self._low_flops_count = 0
+
+        if self._low_flops_count >= self.collapse_check_window:
+            self.language_penalty_max *= 0.5
+            self._collapse_halvings += 1
+            self._low_flops_count = 0
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Collapse detected! Halving language_penalty_max "
+                f"to {self.language_penalty_max:.6f} "
+                f"(halving #{self._collapse_halvings})"
+            )
+
+    def set_global_step(self, step: int) -> None:
+        """Update global step for warmup scheduling."""
+        self._global_step = step
+
     def forward(
         self,
         anchor_repr: torch.Tensor,
@@ -1869,21 +1922,7 @@ class SPLADELossV28(SPLADELossV26):
         """
         Compute combined loss with V28 language filtering.
 
-        Args:
-            anchor_repr: Anchor sparse representations [batch_size, vocab_size]
-            positive_repr: Positive sparse representations [batch_size, vocab_size]
-            negative_repr: Negative sparse representations [batch_size, vocab_size]
-            anchor_input_ids: Anchor token IDs [batch_size, seq_len]
-            anchor_attention_mask: Anchor attention mask [batch_size, seq_len]
-            positive_input_ids: Positive token IDs [batch_size, seq_len]
-            positive_attention_mask: Positive attention mask [batch_size, seq_len]
-            anchor_texts: Raw anchor texts for teacher scoring
-            positive_texts: Raw positive texts for teacher scoring
-            teacher_scores: Pre-computed teacher scores
-
-        Returns:
-            total_loss: Combined loss value
-            loss_dict: Dictionary with individual loss components
+        Includes warmup scheduling and collapse detection.
         """
         # Get V26 base losses
         total_loss, loss_dict = super().forward(
@@ -1899,20 +1938,29 @@ class SPLADELossV28(SPLADELossV26):
             teacher_scores=teacher_scores,
         )
 
-        # V28: Add language filtering penalty
+        # V28: Add language filtering with warmup
         if self.enable_language_filtering and self.non_korean_mask is not None:
             lang_penalty = self._compute_language_penalty(anchor_repr)
-            total_loss = total_loss + self.lambda_language * lang_penalty
+            effective_lambda = self._get_effective_lambda_language()
+            total_loss = total_loss + effective_lambda * lang_penalty
             loss_dict["language_penalty"] = lang_penalty.item()
+            loss_dict["effective_lambda_lang"] = effective_lambda
 
             # Track Korean ratio
             korean_ratio = self._compute_korean_ratio(anchor_repr)
             self._korean_ratio_sum += korean_ratio
             self._korean_ratio_count += 1
             loss_dict["korean_ratio"] = korean_ratio
+
+            # Collapse detection using flops from base loss
+            flops_val = loss_dict.get("flops", 1.0)
+            self._check_collapse(flops_val)
+            loss_dict["collapse_halvings"] = self._collapse_halvings
         else:
             loss_dict["language_penalty"] = 0.0
             loss_dict["korean_ratio"] = 1.0
+            loss_dict["effective_lambda_lang"] = 0.0
+            loss_dict["collapse_halvings"] = 0
 
         return total_loss, loss_dict
 
@@ -1931,3 +1979,4 @@ class SPLADELossV28(SPLADELossV26):
     def update_language_weight(self, lambda_language: float) -> None:
         """Update language filtering weight."""
         self.lambda_language = lambda_language
+        self.language_penalty_max = lambda_language

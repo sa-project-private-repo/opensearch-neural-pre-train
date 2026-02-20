@@ -23,6 +23,7 @@ import torch
 from src.train.config import load_config
 from src.train.config.v28 import V28Config, create_default_v28_config
 from src.train.core import SPLADETrainer, CheckpointManager
+from src.train.core.collapse_detector import CollapseDetectionHook
 from src.train.core.hooks import (
     CheckpointHook,
     CurriculumHook,
@@ -489,6 +490,10 @@ def setup_training(
         non_korean_penalty=config.loss.non_korean_penalty,
         korean_penalty=config.loss.korean_token_penalty,
         enable_language_filtering=config.loss.enable_language_filtering,
+        language_warmup_steps=config.loss.language_warmup_steps,
+        language_penalty_max=config.loss.language_penalty_max,
+        collapse_flops_threshold=config.loss.collapse_flops_threshold,
+        collapse_check_window=config.loss.collapse_check_window,
         lambda_infonce=config.loss.lambda_infonce,
         lambda_self=config.loss.lambda_self,
         lambda_positive=config.loss.lambda_positive,
@@ -577,6 +582,19 @@ def setup_training(
             tensorboard_writer=tb_logger.writer,
         ),
     ]
+
+    # Add collapse detection hook
+    if config.loss.enable_language_filtering:
+        hooks.append(CollapseDetectionHook(
+            flops_threshold=config.loss.collapse_flops_threshold,
+            check_window=config.loss.collapse_check_window,
+            check_every_n_steps=config.training.log_every_n_steps,
+        ))
+        logger.info("Collapse detection enabled")
+        logger.info(
+            f"  threshold={config.loss.collapse_flops_threshold}, "
+            f"window={config.loss.collapse_check_window}"
+        )
 
     # Add curriculum hook if enabled
     if config.enable_curriculum:

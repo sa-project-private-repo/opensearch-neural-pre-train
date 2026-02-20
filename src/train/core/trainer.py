@@ -429,6 +429,10 @@ class SPLADETrainer:
         self.optimizer.zero_grad()
         self.global_step += 1
 
+        # Sync global step to loss_fn for warmup scheduling
+        if hasattr(self.loss_fn, "set_global_step"):
+            self.loss_fn.set_global_step(self.global_step)
+
     @torch.no_grad()
     def _validate(self) -> Dict[str, float]:
         """

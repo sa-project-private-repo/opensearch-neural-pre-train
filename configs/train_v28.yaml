@@ -38,15 +38,15 @@ loss:
   lambda_positive: 2.0
   lambda_margin: 0.0
   lambda_flops: 0.010
-  lambda_min_act: 1.0
+  lambda_min_act: 5.0
   lambda_kd: 2.0
 
   # Temperature settings
   temperature: 0.07
   kd_temperature: 3.0
   margin: 0.3
-  top_k: 5
-  min_activation: 0.5
+  top_k: 10
+  min_activation: 1.0
 
   # IDF Configuration (from V26)
   use_idf_weighting: true
@@ -59,11 +59,19 @@ loss:
   stopword_penalty: 15.0
   use_extended_stopwords: true
 
-  # V28a: Language Filtering
+  # V28a: Language Filtering (FIXED - collapse prevention)
   enable_language_filtering: true
-  korean_token_penalty: 0.0      # No penalty for Korean tokens
-  non_korean_penalty: 100.0      # High penalty for non-Korean tokens
-  lambda_language: 0.5           # Weight for language filtering loss
+  korean_token_penalty: 0.0
+  non_korean_penalty: 1.0        # Soft nudge (was 100.0)
+  lambda_language: 0.1           # 5x reduction (was 0.5)
+
+  # Language penalty warmup
+  language_warmup_steps: 5000
+  language_penalty_max: 0.1
+
+  # Collapse detection
+  collapse_flops_threshold: 0.01
+  collapse_check_window: 3
 
   # V28b: Context-Gated Expansion
   use_context_gate: true
