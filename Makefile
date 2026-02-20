@@ -12,7 +12,10 @@
 	collect-travel prepare-v27-data train-v27 train-v27-bg train-v27-resume \
 	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline \
 	build-korean-tokens train-v28 train-v28-bg train-v28-resume train-v28-after-v27 train-v28a \
-	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline
+	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline \
+	collect-v29-data build-v29-data v29-data-stats \
+	train-v28-ddp train-v28-ddp-bg train-v28-ddp-resume logs-v28-ddp tensorboard-v28-ddp \
+	v29-pipeline v29-pipeline-bg
 
 # Default target
 .DEFAULT_GOAL := help
@@ -31,6 +34,7 @@ CONFIG_V24 := configs/train_v24.yaml
 CONFIG_V25 := configs/train_v25.yaml
 CONFIG_V26 := configs/train_v26.yaml
 CONFIG_V27 := configs/train_v27.yaml
+CONFIG_V28_B200 := configs/train_v28_b200.yaml
 
 # Output directories
 OUTPUT_BASELINE := outputs/baseline_dgx
@@ -56,6 +60,13 @@ V26_HF_DIR := huggingface/v26
 V27_DATA_DIR := data/v27.0
 V27_CHECKPOINT_DIR := checkpoints/v27.0
 V27_HF_DIR := huggingface/v27
+
+# V29 data directories
+V29_DATA_DIR := data/v29.0
+V29_RAW_DIR := data/v29.0/raw
+
+# V28 DDP output
+OUTPUT_V28_DDP := outputs/train_v28_ddp
 
 # Colors for output
 BLUE := \033[0;34m
@@ -782,6 +793,175 @@ v28-pipeline: ## Run full V28 pipeline (build tokens -> train -> eval)
 	@echo "  make train-v28       (foreground)"
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
+##@ V29 Data Pipeline (Expanded Korean Data)
+
+collect-v29-data: ## Collect Korean datasets from HuggingFace (KorQuAD, KLUE, mC4, etc.)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Collecting Korean Datasets$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(YELLOW)Sources:$(NC)"
+	@echo "  - KorQuAD 2.0, KLUE-MRC/STS/NLI"
+	@echo "  - Ko-StrategyQA, KoAlpaca, Open-Orca-Ko"
+	@echo "  - mC4 Korean, Korean Wikipedia, OPUS en-ko"
+	@echo "$(YELLOW)Output:$(NC) $(V29_RAW_DIR)"
+	@echo ""
+	@mkdir -p $(V29_RAW_DIR)
+	@$(PYTHON) scripts/collect_korean_datasets.py \
+		--output-dir $(V29_RAW_DIR) \
+		--max-samples 500000
+	@echo "$(GREEN)✓ Korean datasets collected$(NC)"
+
+build-v29-data: ## Merge, deduplicate, and shard all data into V29 training set
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Building V29 Training Data$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(YELLOW)Sources:$(NC)"
+	@echo "  - V29 raw (HF datasets)"
+	@echo "  - V24.0 (1.08M pairs)"
+	@echo "  - V27.0 (57K travel pairs)"
+	@echo "  - AIHub (1.65M pairs)"
+	@echo "$(YELLOW)Target:$(NC) ~8M+ pairs after dedup"
+	@echo ""
+	@$(PYTHON) scripts/build_v29_data.py \
+		--output-dir $(V29_DATA_DIR) \
+		--shard-size 100000 \
+		--val-ratio 0.05 \
+		--seed 42 \
+		--dedup-threshold 0.8
+	@echo ""
+	@echo "$(GREEN)✓ V29 training data ready$(NC)"
+
+v29-data-stats: ## Show V29 data statistics
+	@echo "$(BLUE)V29 Data Statistics:$(NC)"
+	@if ls $(V29_DATA_DIR)/train_*.jsonl 1>/dev/null 2>&1; then \
+		echo "$(YELLOW)Train shards:$(NC)"; \
+		wc -l $(V29_DATA_DIR)/train_*.jsonl | tail -1; \
+		echo "$(YELLOW)Validation:$(NC)"; \
+		wc -l $(V29_DATA_DIR)/val.jsonl; \
+		echo "$(YELLOW)Shard count:$(NC)"; \
+		ls $(V29_DATA_DIR)/train_*.jsonl | wc -l; \
+	else \
+		echo "$(RED)No V29 data found. Run: make build-v29-data$(NC)"; \
+	fi
+
+##@ V28 DDP Training (Multi-GPU B200 x8)
+
+train-v28-ddp: ## V28 DDP training on multi-GPU (torchrun)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Starting V28 DDP Training (Multi-GPU)$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_V28_B200)"
+	@echo "Output: $(OUTPUT_V28_DDP)"
+	@echo ""
+	@GPU_COUNT=$$(nvidia-smi -L 2>/dev/null | wc -l || echo "0"); \
+	echo "$(YELLOW)Detected GPUs:$(NC) $$GPU_COUNT"; \
+	echo "$(YELLOW)Per-GPU batch:$(NC) 64"; \
+	echo "$(YELLOW)Grad accum:$(NC) 4"; \
+	echo "$(YELLOW)Effective batch:$(NC) $$(( 64 * 4 * $$GPU_COUNT ))"; \
+	echo ""; \
+	mkdir -p $(OUTPUT_V28_DDP); \
+	export NCCL_DEBUG=INFO; \
+	export NCCL_IB_DISABLE=0; \
+	export NCCL_NET_GDR_LEVEL=5; \
+	export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; \
+	torchrun \
+		--nproc_per_node=$$GPU_COUNT \
+		--master_addr=localhost \
+		--master_port=29500 \
+		-m src.train.cli.train_v28_ddp \
+		--config $(CONFIG_V28_B200) \
+		--output-dir $(OUTPUT_V28_DDP)
+
+train-v28-ddp-bg: ## V28 DDP training in background (nohup)
+	@echo "$(BLUE)Starting V28 DDP training in background...$(NC)"
+	@mkdir -p $(OUTPUT_V28_DDP)
+	@GPU_COUNT=$$(nvidia-smi -L 2>/dev/null | wc -l || echo "0"); \
+	NCCL_DEBUG=INFO NCCL_IB_DISABLE=0 NCCL_NET_GDR_LEVEL=5 \
+	PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	nohup torchrun \
+		--nproc_per_node=$$GPU_COUNT \
+		--master_addr=localhost \
+		--master_port=29500 \
+		-m src.train.cli.train_v28_ddp \
+		--config $(CONFIG_V28_B200) \
+		--output-dir $(OUTPUT_V28_DDP) \
+		> $(OUTPUT_V28_DDP)/nohup.out 2>&1 &
+	@echo "$(GREEN)DDP training started in background$(NC)"
+	@sleep 2
+	@echo "PID: $$(pgrep -f 'train_v28_ddp' | head -1)"
+	@echo "Log: $(OUTPUT_V28_DDP)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-v28-ddp"
+	@echo "  make tensorboard-v28-ddp"
+
+train-v28-ddp-resume: ## Resume V28 DDP training from checkpoint
+	@echo "$(BLUE)Resuming V28 DDP training from checkpoint...$(NC)"
+	@GPU_COUNT=$$(nvidia-smi -L 2>/dev/null | wc -l || echo "0"); \
+	export NCCL_DEBUG=INFO; \
+	export NCCL_IB_DISABLE=0; \
+	export NCCL_NET_GDR_LEVEL=5; \
+	export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; \
+	torchrun \
+		--nproc_per_node=$$GPU_COUNT \
+		--master_addr=localhost \
+		--master_port=29500 \
+		-m src.train.cli.train_v28_ddp \
+		--config $(CONFIG_V28_B200) \
+		--output-dir $(OUTPUT_V28_DDP) \
+		--resume
+
+logs-v28-ddp: ## Show V28 DDP training logs (real-time)
+	@echo "$(BLUE)V28 DDP Training Logs:$(NC)"
+	@if [ -f $(OUTPUT_V28_DDP)/training.log ]; then \
+		tail -f $(OUTPUT_V28_DDP)/training.log; \
+	elif [ -f $(OUTPUT_V28_DDP)/nohup.out ]; then \
+		tail -f $(OUTPUT_V28_DDP)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Start training first with: make train-v28-ddp$(NC)"; \
+	fi
+
+tensorboard-v28-ddp: ## Start TensorBoard for V28 DDP training
+	@echo "$(BLUE)Starting TensorBoard...$(NC)"
+	@echo "URL: http://localhost:6006"
+	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V28_DDP)/tensorboard --port 6006
+
+##@ V29 Full Pipeline (Data + DDP Training)
+
+v29-pipeline: ## Run full V29 pipeline (collect -> build -> DDP train)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)V29 Full Training Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Pipeline:$(NC)"
+	@echo "  1. Collect Korean datasets from HuggingFace"
+	@echo "  2. Merge, dedup, shard into V29 training set"
+	@echo "  3. DDP training on all available GPUs"
+	@echo ""
+	@echo "$(BLUE)[1/3]$(NC) Collecting Korean datasets..."
+	@$(MAKE) collect-v29-data
+	@echo ""
+	@echo "$(BLUE)[2/3]$(NC) Building V29 training data..."
+	@$(MAKE) build-v29-data
+	@echo ""
+	@echo "$(BLUE)[3/3]$(NC) Starting DDP training..."
+	@$(MAKE) train-v28-ddp
+	@echo ""
+	@echo "$(GREEN)✓ V29 pipeline complete$(NC)"
+
+v29-pipeline-bg: ## Run V29 pipeline in background (nohup)
+	@echo "$(BLUE)Starting V29 pipeline in background...$(NC)"
+	@mkdir -p $(OUTPUT_V28_DDP)
+	@nohup bash scripts/run_v28_pipeline.sh > $(OUTPUT_V28_DDP)/pipeline.log 2>&1 &
+	@echo "$(GREEN)Pipeline started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$!"
+	@echo "Log: $(OUTPUT_V28_DDP)/pipeline.log"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  tail -f $(OUTPUT_V28_DDP)/pipeline.log"
+	@echo "  make logs-v28-ddp"
 
 ##@ Monitoring
 
