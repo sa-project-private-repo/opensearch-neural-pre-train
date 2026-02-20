@@ -812,25 +812,16 @@ collect-v29-data: ## Collect Korean datasets from HuggingFace (KorQuAD, KLUE, mC
 		--max-samples 500000
 	@echo "$(GREEN)✓ Korean datasets collected$(NC)"
 
-build-v29-data: ## Merge, deduplicate, and shard all data into V29 training set
-	@echo "$(BLUE)========================================$(NC)"
-	@echo "$(GREEN)Building V29 Training Data$(NC)"
-	@echo "$(BLUE)========================================$(NC)"
-	@echo "$(YELLOW)Sources:$(NC)"
-	@echo "  - V29 raw (HF datasets)"
-	@echo "  - V24.0 (1.08M pairs)"
-	@echo "  - V27.0 (57K travel pairs)"
-	@echo "  - AIHub (1.65M pairs)"
-	@echo "$(YELLOW)Target:$(NC) ~8M+ pairs after dedup"
-	@echo ""
+build-v29-data: ## Merge, deduplicate, and shard all data (fast bash, ~1-2 min)
+	@bash scripts/build_v29_data_fast.sh $(V29_DATA_DIR) 100000 0.05
+
+build-v29-data-slow: ## Merge, deduplicate with MinHash LSH (Python, slow)
 	@$(PYTHON) scripts/build_v29_data.py \
 		--output-dir $(V29_DATA_DIR) \
 		--shard-size 100000 \
 		--val-ratio 0.05 \
 		--seed 42 \
 		--dedup-threshold 0.8
-	@echo ""
-	@echo "$(GREEN)✓ V29 training data ready$(NC)"
 
 v29-data-stats: ## Show V29 data statistics
 	@echo "$(BLUE)V29 Data Statistics:$(NC)"
