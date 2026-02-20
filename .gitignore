@@ -38,3 +38,6 @@ data/
 
 .cache
 .omc/
+
+# Rust build artifacts
+tools/*/target/

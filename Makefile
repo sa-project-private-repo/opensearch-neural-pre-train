@@ -13,7 +13,7 @@
 	eval-v27 eval-v27-travel convert-v27-hf logs-v27 tensorboard-v27 v27-pipeline \
 	build-korean-tokens train-v28 train-v28-bg train-v28-resume train-v28-after-v27 train-v28a \
 	eval-v28 eval-v28-language eval-v28-context convert-v28-hf logs-v28 tensorboard-v28 v28-pipeline \
-	collect-v29-data build-v29-data v29-data-stats \
+	compute-idf-rust collect-v29-data build-v29-data v29-data-stats \
 	train-v28-ddp train-v28-ddp-bg train-v28-ddp-resume logs-v28-ddp tensorboard-v28-ddp \
 	v29-pipeline v29-pipeline-bg
 
@@ -795,6 +795,23 @@ v28-pipeline: ## Run full V28 pipeline (build tokens -> train -> eval)
 	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
 
 ##@ V29 Data Pipeline (Expanded Korean Data)
+
+IDF_COMPUTE_BIN := tools/idf-compute/target/release/idf-compute
+
+$(IDF_COMPUTE_BIN):
+	@echo "$(BLUE)Building Rust IDF compute tool...$(NC)"
+	@source "$$HOME/.cargo/env" && cd tools/idf-compute && cargo build --release
+	@echo "$(GREEN)✓ idf-compute built$(NC)"
+
+compute-idf-rust: $(IDF_COMPUTE_BIN) ## Compute IDF weights with Rust (fast, ~30s)
+	@echo "$(BLUE)Computing IDF weights (Rust parallel)...$(NC)"
+	@$(IDF_COMPUTE_BIN) \
+		--tokenizer xlm-roberta-base \
+		--input "data/v29.0/train_shard_*.jsonl" \
+		--output outputs/idf_weights/xlmr_v29_idf \
+		--smoothing bm25
+	@$(PYTHON) tools/idf-compute/load_idf.py outputs/idf_weights/xlmr_v29_idf
+	@echo "$(GREEN)✓ IDF weights ready: outputs/idf_weights/xlmr_v29_idf.pt$(NC)"
 
 collect-v29-data: ## Collect Korean datasets from HuggingFace (KorQuAD, KLUE, mC4, etc.)
 	@echo "$(BLUE)========================================$(NC)"
