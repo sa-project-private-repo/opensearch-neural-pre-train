@@ -879,6 +879,54 @@ def load_splade_context_gated(
     return model
 
 
+def load_unified_encoder(
+    checkpoint_path: str,
+    model_name: str = "xlm-roberta-base",
+    gate_hidden: int = 256,
+    gate_heads: int = 4,
+    dense_output_size: int = 768,
+    device: str = "cuda",
+):
+    """
+    Load trained UnifiedEncoder (sparse + dense) model from checkpoint.
+
+    Args:
+        checkpoint_path: Path to model checkpoint
+        model_name: Base XLM-RoBERTa model name
+        gate_hidden: Hidden dimension for context gate
+        gate_heads: Number of attention heads in context gate
+        dense_output_size: Dense head output embedding dimension
+        device: Target device
+
+    Returns:
+        Loaded UnifiedEncoder model in eval mode
+    """
+    # Import here to avoid circular imports
+    from src.model.unified_encoder import UnifiedEncoder
+
+    model = UnifiedEncoder(
+        model_name=model_name,
+        gate_hidden=gate_hidden,
+        gate_heads=gate_heads,
+        dense_output_size=dense_output_size,
+    )
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    model.load_state_dict(state_dict, strict=False)
+    model = model.to(device)
+    model.eval()
+
+    return model
+
+
 def load_splade_v29(
     checkpoint_path: str,
     model_name: str = "xlm-roberta-base",

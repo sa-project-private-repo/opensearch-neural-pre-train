@@ -2482,3 +2482,188 @@ class SPLADELossV30(SPLADELossV26):
             lambda_language: New language filtering weight
         """
         self.lambda_language = lambda_language
+
+
+# ===== Issue #17: Unified Sparse + Dense Losses =====
+
+
+class DenseContrastiveLoss(nn.Module):
+    """InfoNCE loss for dense embeddings with in-batch negatives."""
+
+    def __init__(self, temperature: float = 0.05):
+        """
+        Initialize dense contrastive loss.
+
+        Args:
+            temperature: Temperature for softmax scaling (lower = sharper)
+        """
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(
+        self,
+        query_dense: torch.Tensor,
+        positive_dense: torch.Tensor,
+        negative_dense: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute InfoNCE loss for dense embeddings with in-batch negatives.
+
+        Args:
+            query_dense: Query dense embeddings [batch, dim] (L2-normalized)
+            positive_dense: Positive dense embeddings [batch, dim] (L2-normalized)
+            negative_dense: Optional explicit negatives [batch, dim]
+
+        Returns:
+            Scalar InfoNCE loss
+        """
+        batch_size = query_dense.shape[0]
+
+        # Embeddings should already be L2-normalized from DenseHead,
+        # but normalize again for safety
+        query_dense = F.normalize(query_dense, p=2, dim=-1)
+        positive_dense = F.normalize(positive_dense, p=2, dim=-1)
+
+        # Cosine similarity matrix [batch, batch]
+        sim_matrix = torch.mm(query_dense, positive_dense.t()) / self.temperature
+
+        if negative_dense is not None:
+            negative_dense = F.normalize(negative_dense, p=2, dim=-1)
+            neg_sim = torch.mm(query_dense, negative_dense.t()) / self.temperature
+            sim_matrix = torch.cat([sim_matrix, neg_sim], dim=1)
+
+        # Labels: diagonal elements are positives
+        labels = torch.arange(batch_size, device=query_dense.device)
+        loss = F.cross_entropy(sim_matrix, labels)
+
+        return loss
+
+
+class DenseKDLoss(nn.Module):
+    """Knowledge distillation loss: MSE between dense scores and teacher scores."""
+
+    def __init__(self):
+        """Initialize dense KD loss."""
+        super().__init__()
+
+    def forward(
+        self,
+        student_dense_scores: torch.Tensor,
+        teacher_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute MSE loss between student dense similarity scores and teacher scores.
+
+        Args:
+            student_dense_scores: Student cosine similarity matrix [batch, batch]
+            teacher_scores: Teacher similarity scores [batch, batch]
+
+        Returns:
+            Scalar MSE loss
+        """
+        return F.mse_loss(student_dense_scores, teacher_scores)
+
+
+class UnifiedLoss(nn.Module):
+    """Combined loss for unified sparse + dense training."""
+
+    def __init__(
+        self,
+        sparse_loss: nn.Module,
+        alpha_dense_contrastive: float = 0.3,
+        beta_dense_kd: float = 0.1,
+        dense_temperature: float = 0.05,
+    ):
+        """
+        Initialize unified loss combining sparse and dense objectives.
+
+        Args:
+            sparse_loss: Existing sparse loss (e.g. SPLADELossV28)
+            alpha_dense_contrastive: Weight for dense contrastive loss
+            beta_dense_kd: Weight for dense knowledge distillation loss
+            dense_temperature: Temperature for dense contrastive loss
+        """
+        super().__init__()
+        self.sparse_loss = sparse_loss
+        self.dense_contrastive = DenseContrastiveLoss(temperature=dense_temperature)
+        self.dense_kd = DenseKDLoss()
+        self.alpha = alpha_dense_contrastive
+        self.beta = beta_dense_kd
+
+    def forward(
+        self,
+        # Sparse inputs (passed directly to sparse_loss)
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        anchor_input_ids: torch.Tensor,
+        anchor_attention_mask: torch.Tensor,
+        positive_input_ids: torch.Tensor,
+        positive_attention_mask: torch.Tensor,
+        # Dense inputs
+        query_dense: torch.Tensor,
+        positive_dense: torch.Tensor,
+        negative_dense: Optional[torch.Tensor] = None,
+        # Optional teacher scores for both sparse and dense KD
+        teacher_scores: Optional[torch.Tensor] = None,
+        # Additional kwargs forwarded to sparse_loss
+        **sparse_kwargs,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Compute unified sparse + dense loss.
+
+        Args:
+            anchor_repr: Anchor sparse representations [batch, vocab_size]
+            positive_repr: Positive sparse representations [batch, vocab_size]
+            negative_repr: Negative sparse representations [batch, vocab_size]
+            anchor_input_ids: Anchor token IDs [batch, seq_len]
+            anchor_attention_mask: Anchor attention mask [batch, seq_len]
+            positive_input_ids: Positive token IDs [batch, seq_len]
+            positive_attention_mask: Positive attention mask [batch, seq_len]
+            query_dense: Query dense embeddings [batch, dim]
+            positive_dense: Positive dense embeddings [batch, dim]
+            negative_dense: Optional negative dense embeddings [batch, dim]
+            teacher_scores: Pre-computed teacher scores [batch, batch]
+            **sparse_kwargs: Additional keyword arguments for sparse_loss
+
+        Returns:
+            Dict with keys: total_loss, sparse_loss, dense_contrastive_loss, dense_kd_loss
+        """
+        # Sparse loss
+        sparse_total, sparse_dict = self.sparse_loss(
+            anchor_repr=anchor_repr,
+            positive_repr=positive_repr,
+            negative_repr=negative_repr,
+            anchor_input_ids=anchor_input_ids,
+            anchor_attention_mask=anchor_attention_mask,
+            positive_input_ids=positive_input_ids,
+            positive_attention_mask=positive_attention_mask,
+            teacher_scores=teacher_scores,
+            **sparse_kwargs,
+        )
+
+        # Dense contrastive loss
+        dense_contrastive = self.dense_contrastive(
+            query_dense, positive_dense, negative_dense
+        )
+
+        # Dense KD loss (optional, only when teacher scores available)
+        dense_kd = torch.tensor(0.0, device=query_dense.device)
+        if self.beta > 0 and teacher_scores is not None:
+            query_norm = F.normalize(query_dense, p=2, dim=-1)
+            pos_norm = F.normalize(positive_dense, p=2, dim=-1)
+            student_dense_scores = torch.mm(query_norm, pos_norm.t())
+            dense_kd = self.dense_kd(student_dense_scores, teacher_scores)
+
+        total_loss = (
+            sparse_total
+            + self.alpha * dense_contrastive
+            + self.beta * dense_kd
+        )
+
+        return {
+            "total_loss": total_loss,
+            "sparse_loss": sparse_total,
+            "dense_contrastive_loss": dense_contrastive,
+            "dense_kd_loss": dense_kd,
+        }

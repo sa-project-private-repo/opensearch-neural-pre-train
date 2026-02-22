@@ -27,6 +27,12 @@ from src.train.config.v29 import (
     V29ModelConfig,
     create_default_v29_config,
 )
+from src.train.config.v31 import (
+    V31Config,
+    V31LossConfig,
+    V31ModelConfig,
+    create_default_v31_config,
+)
 
 __all__ = [
     # Base configs
@@ -53,6 +59,11 @@ __all__ = [
     "V29LossConfig",
     "V29ModelConfig",
     "create_default_v29_config",
+    # V31 Unified Encoder
+    "V31Config",
+    "V31LossConfig",
+    "V31ModelConfig",
+    "create_default_v31_config",
     # Utils
     "load_config",
     "save_config",

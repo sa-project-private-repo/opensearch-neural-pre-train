@@ -1,0 +1,166 @@
+# V31 Unified Sparse + Dense Encoder Configuration (Issue #17)
+#
+# Extends V28 context-gated SPLADE with a dense retrieval head:
+# - Sparse head: context-gated SPLADE (same as V28)
+# - Dense head: CLS-pooled, L2-normalized 768-dim embedding
+#
+# Training phases:
+#   Phase 0 (epochs 1-2): Freeze sparse-specific params, warm up dense head
+#   Phase 1+: Joint sparse + dense training
+#
+# Usage:
+#   torchrun --nproc_per_node=8 -m src.train.cli.train_v31 \
+#     --config configs/train_v31.yaml
+
+# Model Configuration
+model:
+  name: "xlm-roberta-base"
+  dropout: 0.1
+  use_expansion: true
+  expansion_mode: "mlm"
+  model_class: "UnifiedEncoder"
+  use_context_gate: true
+  context_gate_hidden: 256
+  context_attention_heads: 4
+  dense_output_size: 768
+
+# Data Configuration (V29 expanded dataset)
+data:
+  train_files:
+    - "data/v29.0/train_*.jsonl"
+  val_files:
+    - "data/v29.0/val.jsonl"
+  batch_size: 32           # per GPU
+  max_length: 192
+  query_max_length: 64
+  doc_max_length: 256
+  num_workers: 4
+
+# Loss Configuration
+loss:
+  # === Sparse loss weights (inherited from V28) ===
+  lambda_infonce: 3.0
+  lambda_self: 0.5
+  lambda_positive: 2.0
+  lambda_margin: 0.0
+  lambda_flops: 0.010
+  lambda_min_act: 5.0
+  lambda_kd: 2.0
+
+  # Temperature settings
+  temperature: 0.07
+  kd_temperature: 3.0
+  margin: 0.3
+  top_k: 10
+  min_activation: 1.0
+
+  # IDF Configuration
+  use_idf_weighting: true
+  idf_alpha: 4.0
+  idf_smoothing: "bm25"
+  special_token_penalty: 100.0
+
+  # Stopword Configuration
+  use_stopword_mask: true
+  stopword_penalty: 15.0
+  use_extended_stopwords: true
+
+  # Language Filtering (V28)
+  enable_language_filtering: true
+  korean_token_penalty: 0.0
+  non_korean_penalty: 1.0
+  lambda_language: 0.1
+  language_warmup_steps: 5000
+  language_penalty_max: 0.1
+
+  # Collapse detection
+  collapse_flops_threshold: 0.01
+  collapse_check_window: 3
+
+  # Context Gate (V28)
+  use_context_gate: true
+  context_gate_hidden: 256
+  context_attention_heads: 4
+  context_gate_dropout: 0.1
+  use_context_aware_kd: true
+  context_kd_weight: 1.0
+
+  # === Dense loss weights (V31 new) ===
+  alpha_dense_contrastive: 0.3   # Dense InfoNCE weight
+  beta_dense_kd: 0.1             # Dense KD (MSE vs teacher) weight
+  dense_temperature: 0.05        # InfoNCE temperature for dense head
+  dense_output_size: 768         # Dense embedding dimension
+
+  # Staged training: freeze sparse head for N epochs
+  freeze_sparse_epochs: 2
+
+# Training Configuration
+training:
+  num_epochs: 25
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 8    # effective = 32*8*8 = 2048
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v31"
+  experiment_name: "splade_v31_unified_encoder"
+  log_every_n_steps: 50
+  save_every_n_epochs: 5
+  save_every_n_steps: null
+  keep_last_n_checkpoints: 3
+
+# Knowledge Distillation
+knowledge_distillation:
+  enabled: true
+  teacher_model: "BAAI/bge-m3"
+  warmup_epochs: 2
+  annealing_epochs: 20
+
+# Hard Negative Mining
+hard_negative_mining:
+  enabled: true
+  mine_every_n_epochs: 3
+  num_hard_negatives: 5
+  temperature: 0.1
+
+# Curriculum Learning
+enable_curriculum: true
+curriculum_phases:
+  - start_epoch: 1
+    end_epoch: 8
+    temperature: 0.08
+    lambda_infonce: 2.5
+    lr_multiplier: 1.0
+    lambda_kd: 2.5
+    data_weights:
+      single_term: 0.4
+      multi_term: 0.35
+      original: 0.25
+    description: "Phase 1: Foundation with BGE-M3 teacher (dense head warm-up)"
+
+  - start_epoch: 9
+    end_epoch: 17
+    temperature: 0.05
+    lambda_infonce: 3.0
+    lr_multiplier: 0.5
+    lambda_kd: 1.5
+    data_weights:
+      single_term: 0.3
+      multi_term: 0.35
+      hard_neg: 0.35
+    description: "Phase 2: Joint sparse + dense with hard negatives"
+
+  - start_epoch: 18
+    end_epoch: 25
+    temperature: 0.04
+    lambda_infonce: 3.0
+    lr_multiplier: 0.25
+    lambda_kd: 0.8
+    data_weights:
+      hard_neg: 0.5
+      multi_term: 0.3
+      single_term: 0.2
+    description: "Phase 3: Hard negative refinement"
+
+seed: 42

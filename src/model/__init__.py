@@ -27,7 +27,11 @@ from src.model.losses import (
     DenseTeacherScorer,
     SPLADELossV23,
     SPLADELossV25,
+    DenseContrastiveLoss,
+    DenseKDLoss,
+    UnifiedLoss,
 )
+from src.model.unified_encoder import DenseHead, UnifiedEncoder
 
 __all__ = [
     # Models - KoBERT/mBERT
@@ -44,6 +48,9 @@ __all__ = [
     "SPLADEv3",
     "SparseEmbedding",
     "load_splade_v3",
+    # Models - V31 Unified
+    "DenseHead",
+    "UnifiedEncoder",
     # Teachers
     "BGEM3Teacher",
     "create_bge_m3_teacher",
@@ -62,4 +69,8 @@ __all__ = [
     "SPLADELossV23",
     # V25 IDF-Aware Loss
     "SPLADELossV25",
+    # V31 Unified Losses
+    "DenseContrastiveLoss",
+    "DenseKDLoss",
+    "UnifiedLoss",
 ]
