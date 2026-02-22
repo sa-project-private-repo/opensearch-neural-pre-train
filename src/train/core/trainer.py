@@ -202,7 +202,9 @@ class SPLADETrainer:
         }
 
         try:
-            for epoch in range(1, self.config.training.num_epochs + 1):
+            # Start from resumed epoch + 1 (or 1 if fresh start)
+            start_epoch = getattr(self, "_resume_epoch", 0) + 1
+            for epoch in range(start_epoch, self.config.training.num_epochs + 1):
                 if self._interrupted:
                     break
 
@@ -351,6 +353,11 @@ class SPLADETrainer:
             loss: Scalar loss tensor
             loss_dict: Dictionary of loss components
         """
+        # Clone all tensors to prevent DDP inplace modification errors
+        batch = {
+            k: v.clone() if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
         # Determine autocast dtype
         autocast_dtype = None
         if self.mixed_precision == "bf16":
@@ -402,6 +409,8 @@ class SPLADETrainer:
                 anchor_attention_mask=batch["query_attention_mask"],
                 positive_input_ids=batch["positive_input_ids"],
                 positive_attention_mask=batch["positive_attention_mask"],
+                anchor_texts=batch.get("query_texts"),
+                positive_texts=batch.get("positive_texts"),
             )
 
         return loss, loss_dict

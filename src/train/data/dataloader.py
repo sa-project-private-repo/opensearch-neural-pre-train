@@ -91,6 +91,9 @@ class TripletCollator:
             "positive_attention_mask": positive_encoding["attention_mask"],
             "negative_input_ids": negative_encoding["input_ids"],
             "negative_attention_mask": negative_encoding["attention_mask"],
+            # Raw texts for teacher model KD
+            "query_texts": queries,
+            "positive_texts": positives,
         }
 
         # Add metadata

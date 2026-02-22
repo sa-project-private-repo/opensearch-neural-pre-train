@@ -4,66 +4,38 @@ Korean SPLADE-doc neural sparse retrieval model for OpenSearch.
 
 ## Overview
 
-This repository contains training code and benchmarks for Korean neural sparse search models. The models enable semantic sparse search with synonym expansion for Korean terms.
+Training code and benchmarks for Korean neural sparse search models. The models enable semantic sparse search with synonym expansion for Korean terms.
 
-### Latest Version: V26 (Enhanced IDF with Special Token Fix)
+### Latest Version: V28 (Context-Gated + DDP B200 x8)
 
 | Property | Value |
 |----------|-------|
 | Base Model | `xlm-roberta-base` |
-| Parameters | 278M |
+| Model Class | SPLADEDocContextGated |
+| Parameters | 345M |
 | Vocabulary | 250,002 tokens |
 | Max Length | 192 |
 | Teacher | BAAI/bge-m3 |
+| Training | DDP 8x NVIDIA B200 (183GB each) |
+| Effective Batch | 2048 (32 x 8 x 8 GPUs) |
 
-**Key Features (V26):**
-- Special Token Fix: `<s>`, `</s>` excluded from IDF normalization
-- Enhanced FLOPS: 5x weight increase (0.002 → 0.010)
-- Stronger Stopword Penalty: 3x increase (5.0 → 15.0)
-- Sharper IDF Curve: alpha 2.5 → 4.0
-- Extended Stopword List: 177 tokens (vs V25's 98)
+**Key Features (V28):**
+- Context-Gated Sparse Expansion (multi-head attention gate)
+- Korean Language Filtering with warmup schedule
+- Collapse Detection with auto-halving
+- IDF-Aware FLOPS (BM25 smoothing)
+- Curriculum Learning (3 phases, 25 epochs)
+- Knowledge Distillation from BGE-M3
 
-**V26 vs V25 Hyperparameters:**
-
-| Parameter | V25 | V26 | Reason |
-|-----------|-----|-----|--------|
-| `lambda_flops` | 0.002 | **0.010** | 5x FLOPS penalty boost |
-| `stopword_penalty` | 5.0 | **15.0** | 3x stopword penalty boost |
-| `idf_alpha` | 2.5 | **4.0** | Sharper penalty curve |
-| `special_token_penalty` | - | **100.0** | Fixed penalty for special tokens |
-
-**Target Metrics:**
-- Semantic tokens in top-10: 80%+
-- Stopword activation: <0.3
-- Recall@1: BM25 parity or better
-
-### V26 Benchmark Results (5 Search Methods)
-
-| Method | Recall@1 | Recall@5 | Recall@10 | MRR | P50 (ms) |
-|--------|----------|----------|-----------|-----|----------|
-| **Sparse+Semantic (RRF)** | **44.6%** | **53.0%** | **56.4%** | **0.486** | 122.8 |
-| Neural Sparse | 40.7% | 51.4% | 56.1% | 0.456 | 13.0 |
-| Semantic (Dense) | 37.1% | 50.2% | 53.1% | 0.431 | 15.6 |
-| BM25+Semantic (RRF) | 37.1% | 48.2% | 51.6% | 0.421 | 94.8 |
-| BM25 | 30.0% | 42.2% | 44.6% | 0.354 | 11.6 |
-
-**Key Findings:**
-- **Sparse+Semantic hybrid achieves best performance** (Recall@1 44.6%)
-- Neural Sparse outperforms Dense Semantic by +3.6pp
-- Sparse+Semantic outperforms BM25+Semantic by +7.5pp
-
-### V26 vs V25 Improvement
-
-| Metric | V25 | V26 | Improvement |
-|--------|-----|-----|-------------|
-| Recall@1 | 28.2% | 40.7% | **+44.3%** |
-| Semantic Ratio | 73.2% | 95.8% | **+30.9%** |
+**V29 Data Pipeline:**
+- 3.6M unique training triplets (18.7% dedup from 4.4M)
+- Sources: KorQuAD, KLUE, mC4, Wikipedia, AI Hub, travel domain
+- Rust-based parallel IDF computation (~30s vs 47min Python)
+- Streaming MD5 hash dedup (~1min vs 30min+ Python MinHash)
 
 ---
 
 ## Quick Start
-
-> **V26 Training Guide**: 단계별 학습 가이드는 [GUIDE.md](./GUIDE.md)를 참조하세요.
 
 ### Installation
 
@@ -73,18 +45,34 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Usage
+### Training (DDP Multi-GPU)
+
+```bash
+# Full pipeline: data collection -> dedup -> DDP training
+make v29-pipeline
+
+# Or step by step:
+make build-v29-data       # Merge, dedup, shard (~1 min)
+make compute-idf-rust     # IDF weights (~30s, requires Rust)
+make train-v28-ddp        # DDP training (foreground)
+make train-v28-ddp-bg     # DDP training (background)
+
+# Monitoring
+make logs-v28-ddp         # Real-time logs
+make tensorboard-v28-ddp  # TensorBoard (port 6006)
+make monitor              # GPU usage
+```
+
+### Inference
 
 ```python
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 import torch
 import torch.nn as nn
 
-# Load model
 tokenizer = AutoTokenizer.from_pretrained("sewoong/korean-neural-sparse-encoder")
 model = AutoModelForMaskedLM.from_pretrained("sewoong/korean-neural-sparse-encoder")
 
-# Encode text
 def encode(text):
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=192)
     with torch.no_grad():
@@ -96,7 +84,6 @@ def encode(text):
         sparse_repr = (token_scores * mask).max(dim=1).values[0]
     return sparse_repr
 
-# Example
 sparse = encode("당뇨병 치료 방법")
 top_values, top_indices = sparse.topk(10)
 for idx, val in zip(top_indices, top_values):
@@ -105,284 +92,115 @@ for idx, val in zip(top_indices, top_values):
 
 ---
 
+## Make Targets
+
+### Data Pipeline
+
+| Command | Description |
+|---------|-------------|
+| `make collect-v29-data` | Collect Korean datasets from HuggingFace |
+| `make build-v29-data` | Merge, dedup, shard (bash, ~1-2 min) |
+| `make compute-idf-rust` | IDF weights with Rust (~30s) |
+| `make v29-data-stats` | Show data statistics |
+
+### DDP Training (B200 x8)
+
+| Command | Description |
+|---------|-------------|
+| `make train-v28-ddp` | DDP training (foreground) |
+| `make train-v28-ddp-bg` | DDP training (background, nohup) |
+| `make train-v28-ddp-resume` | Resume from checkpoint |
+| `make logs-v28-ddp` | Real-time training logs |
+| `make tensorboard-v28-ddp` | TensorBoard (port 6006) |
+
+### Pipeline & Monitoring
+
+| Command | Description |
+|---------|-------------|
+| `make v29-pipeline` | Full pipeline: collect -> build -> train |
+| `make benchmark-ko-strategyqa` | Ko-StrategyQA benchmark |
+| `make monitor` | GPU usage (real-time) |
+| `make info` | System information |
+
+---
+
 ## Project Structure
 
 ```
 opensearch-neural-pre-train/
-├── benchmark/                             # Benchmark framework
-│   ├── runner.py                          # Main benchmark runner
-│   ├── encoders.py                        # Dense/Sparse encoders
-│   ├── searchers.py                       # BM25/Semantic/Sparse/Hybrid
-│   ├── metrics.py                         # Recall, MRR, nDCG
-│   └── config.py                          # Benchmark configuration
+├── benchmark/                  # Benchmark framework
+│   ├── runner.py               # Main benchmark runner
+│   ├── encoders.py             # Dense/Sparse encoders
+│   ├── searchers.py            # BM25/Semantic/Sparse/Hybrid
+│   └── metrics.py              # Recall, MRR, nDCG
 ├── src/
-│   ├── model/                             # Model implementations
-│   ├── train/                             # Training scripts (V26, V27)
-│   ├── preprocessing/                     # Data processing pipeline
-│   └── evaluation/                        # Ranking metrics
-├── configs/                               # Training configurations
-│   ├── train_v26.yaml                     # V26 configuration
-│   └── train_v27.yaml                     # V27 travel domain config
-├── data/                                  # Training data
-├── huggingface/v26/                       # V26 model for local use
-└── outputs/                               # Training outputs
+│   ├── model/
+│   │   └── splade_xlmr.py      # SPLADEDocContextGated model
+│   ├── train/
+│   │   ├── cli/train_v28_ddp.py # DDP training entry point
+│   │   ├── core/trainer.py      # Base trainer
+│   │   ├── core/ddp_trainer.py  # DDP trainer (weight untying, broadcast_buffers)
+│   │   └── idf/                 # IDF computation
+│   ├── preprocessing/           # Data processing pipeline
+│   └── evaluation/              # Ranking metrics
+├── tools/
+│   └── idf-compute/            # Rust IDF computation tool
+├── scripts/
+│   ├── build_v29_data_fast.sh  # Fast bash dedup pipeline
+│   └── collect_korean_datasets.py
+├── configs/
+│   └── train_v28_b200.yaml     # V28 DDP config (B200 x8)
+├── data/v29.0/                 # Training data (3.6M triplets)
+└── outputs/train_v28_ddp/      # Training outputs
 ```
 
 ---
 
-## Benchmark
+## Benchmark Results (V26)
 
-Compare search methods against a validation dataset.
-
-### Search Methods
-
-| Method | Description | Index Type |
-|--------|-------------|------------|
-| BM25 | Lexical keyword search | text |
-| Semantic | Dense vector k-NN (bge-m3) | knn_vector |
-| Neural Sparse | SPLADE sparse vectors | rank_features |
-| BM25+Semantic | BM25 + Dense hybrid (RRF fusion) | text + knn_vector |
-| Sparse+Semantic | Neural Sparse + Dense hybrid (RRF fusion) | rank_features + knn_vector |
-
-### Running Benchmarks
-
-```bash
-# Full benchmark (with indexing)
-python -m benchmark.runner --sample-size 1000 --output-dir outputs/benchmark
-
-# Skip indexing (data already indexed)
-python -m benchmark.runner --sample-size 1000 --skip-setup --output-dir outputs/benchmark
-
-# Include hybrid methods (BM25+Semantic, Sparse+Semantic)
-python -m benchmark.runner --sample-size 1000 --skip-setup --include-hybrid --output-dir outputs/benchmark
-
-# Run specific methods only
-python -m benchmark.runner --sample-size 1000 --skip-setup --include-hybrid \
-    --methods bm25 semantic neural_sparse bm25_semantic_rrf hybrid_rrf \
-    --output-dir outputs/benchmark
-```
-
-### Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--sample-size` | Number of queries | 2000 |
-| `--skip-setup` | Skip index creation | False |
-| `--parallel` | Run all methods in parallel | False |
-| `--include-hybrid` | Include hybrid methods (RRF fusion) | False |
-| `--methods` | Specific methods to run | All |
-| `--cleanup` | Delete indices after benchmark | False |
-| `--output-dir` | Output directory | outputs/benchmark |
-
-### Output
-
-```
-outputs/benchmark/
-├── report.md          # Summary report
-├── metrics.json       # Detailed metrics (Recall@K, MRR, nDCG, latency)
-└── benchmark.log      # Execution log
-```
+| Method | Recall@1 | Recall@5 | Recall@10 | MRR | P50 (ms) |
+|--------|----------|----------|-----------|-----|----------|
+| **Sparse+Semantic (RRF)** | **44.6%** | **53.0%** | **56.4%** | **0.486** | 122.8 |
+| Neural Sparse | 40.7% | 51.4% | 56.1% | 0.456 | 13.0 |
+| Semantic (Dense) | 37.1% | 50.2% | 53.1% | 0.431 | 15.6 |
+| BM25+Semantic (RRF) | 37.1% | 48.2% | 51.6% | 0.421 | 94.8 |
+| BM25 | 30.0% | 42.2% | 44.6% | 0.354 | 11.6 |
 
 ---
 
-## Training Pipeline
+## Training Configuration (V28)
 
-### V26 Training (Recommended)
-
-V26 fixes V25's stopword dominance problem by excluding special tokens from IDF normalization and increasing regularization strength.
-
-> 상세 가이드: [GUIDE.md](./GUIDE.md)
-
-#### V26 Make Commands
-
-| Command | Description |
-|---------|-------------|
-| `make prepare-v26-idf` | Compute IDF weights for V26 |
-| `make prepare-v26-data` | Prepare all V26 data |
-| `make train-v26` | Start V26 training (foreground) |
-| `make train-v26-bg` | Start V26 training (background with nohup) |
-| `make train-v26-resume` | Resume V26 training from checkpoint |
-| `make logs-v26` | View V26 training logs (real-time) |
-| `make tensorboard-v26` | Start TensorBoard for V26 |
-| `make convert-v26-hf` | Export V26 to HuggingFace format |
-| `make eval-v26` | Evaluate V26 model |
-| `make eval-v26-sparsity` | Analyze V26 sparsity patterns |
-| `make validate-semantic-ratio` | Validate semantic token ratio |
-| `make v26-pipeline` | Run full V26 pipeline |
-
-#### Full Training Pipeline
-
-```bash
-# 1. IDF weights computation
-make prepare-v26-idf
-
-# 2. Start training (foreground)
-make train-v26
-
-# 3. Or start in background (recommended for long training)
-make train-v26-bg
-
-# 4. Monitor training
-make logs-v26
-make tensorboard-v26
-
-# 5. Resume from checkpoint (if interrupted)
-make train-v26-resume
-
-# 6. After training: export and validate
-make convert-v26-hf
-make validate-semantic-ratio
+**Loss Function:**
+```
+L = λ_infonce * L_infonce       # Contrastive learning (3.0)
+  + λ_self * L_self             # Self-reconstruction (0.5)
+  + λ_positive * L_positive     # Positive alignment (2.0)
+  + λ_flops * L_idf_flops       # IDF-weighted sparsity (0.010)
+  + λ_min_act * L_min_act       # Minimum activation (5.0)
+  + λ_kd * L_kd                 # Knowledge distillation (2.0)
+  + λ_language * L_language      # Korean language filtering (0.1)
 ```
 
-#### Background Execution
+**Curriculum Phases:**
 
-```bash
-# Method 1: Make target (recommended)
-make train-v26-bg
-# PID and log path will be shown
+| Phase | Epochs | Temperature | Focus |
+|-------|--------|-------------|-------|
+| 1 | 1-8 | 0.08 | Foundation with BGE-M3 teacher |
+| 2 | 9-17 | 0.05 | Balanced with hard negatives |
+| 3 | 18-25 | 0.04 | Hard negative refinement |
 
-# Method 2: tmux (for interactive monitoring)
-tmux new -d -s train 'make train-v26'
-tmux attach -t train    # Attach to session
-# Ctrl+b, d              # Detach from session
+**DDP Configuration:**
 
-# Method 3: nohup (manual)
-nohup make train-v26 > outputs/train_v26/training.log 2>&1 &
-```
-
-#### TensorBoard Monitoring
-
-```bash
-# Use make target
-make tensorboard-v26
-
-# Or manually
-tensorboard --logdir outputs/train_v26/tensorboard --port 6006 --bind_all
-```
-
-**Remote Access (SSH Tunneling):**
-```bash
-ssh -L 6006:localhost:6006 ec2-user@<EC2-IP>
-# Then open http://localhost:6006 in browser
-```
-
-#### Training Status Check
-
-```bash
-# View live logs
-make logs-v26
-
-# Or directly
-tail -f outputs/train_v26/training.log
-
-# Check GPU usage
-nvidia-smi -l 1
-```
-
-**V26 Loss Function:**
-```
-L_total = λ_infonce * L_infonce      # Contrastive learning
-        + λ_self * L_self            # Self-reconstruction
-        + λ_positive * L_positive    # Positive alignment
-        + λ_flops * L_idf_flops      # IDF-weighted sparsity (enhanced)
-        + λ_min_act * L_min_act      # Minimum activation
-        + λ_kd * L_kd                # Knowledge distillation
-```
-
-**V26 IDF-Aware FLOPS Enhancements:**
-- Special tokens (`<s>`, `</s>`) → Fixed penalty 100.0 (excluded from IDF normalization)
-- High IDF (rare tokens like 서울, 맛있는) → Low penalty
-- Low IDF (common tokens like 을, 는) → High penalty (15x stopword multiplier)
-
----
-
-## Data Pipeline
-
-### Data Sources
-
-Training data is loaded from HuggingFace datasets:
-
-| Domain | Sources |
-|--------|---------|
-| Encyclopedia | Wikipedia (ko) |
-| QA | KLUE-MRC, KorQuAD 1.0/2.0 |
-| Legal | Korean Law Precedents |
-| Medical | KorMedMCQA (doctor, nurse, pharm, dentist) |
-
-### Training Data Format
-
-Training data uses JSONL (JSON Lines) format where each line is a triplet:
-
-```
-data/v21.4/
-├── training_triplets.jsonl      # Main training set (~423K triplets)
-├── validation_triplets.jsonl    # Validation set (~47K triplets)
-├── phase1_single_term_focus_triplets.jsonl  # Curriculum phase 1
-├── phase2_balanced_triplets.jsonl           # Curriculum phase 2
-└── phase3_full_triplets.jsonl               # Curriculum phase 3
-```
-
-#### Triplet Schema
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `anchor` | string | Input text (query or term) |
-| `positive` | string | Semantically similar text (synonym, paraphrase) |
-| `negative` | string | Hard negative (different meaning) |
-| `difficulty` | string | `easy`, `medium`, `hard` |
-| `length_class` | string | `single_term`, `short_phrase`, `sentence` |
-| `pair_type` | string | Data source identifier |
-
-#### Examples
-
-**Single-term synonym (Korean):**
-```json
-{"anchor": "추천", "positive": "권장", "negative": "반대", "difficulty": "easy", "length_class": "single_term", "pair_type": "single_term"}
-```
-
-**Spelling variation:**
-```json
-{"anchor": "인터컨티넨탈", "positive": "인터콘티넨탈", "negative": "힐튼", "difficulty": "easy", "length_class": "short_phrase", "pair_type": "original"}
-```
-
-**Question-Answer pair (KorQuAD):**
-```json
-{"anchor": "대한민국의 수도는 어디인가?", "positive": "서울은 대한민국의 수도이다", "negative": "부산은 항구도시이다", "difficulty": "medium", "length_class": "sentence", "pair_type": "korquad"}
-```
-
-**Medical terminology:**
-```json
-{"anchor": "당뇨병", "positive": "diabetes mellitus", "negative": "고혈압", "difficulty": "medium", "length_class": "single_term", "pair_type": "original"}
-```
-
-**MS MARCO Korean:**
-```json
-{"anchor": "비타민D 결핍 증상", "positive": "비타민D가 부족하면 뼈가 약해지고 피로감이 증가합니다", "negative": "비타민C는 면역력 강화에 도움이 됩니다", "difficulty": "hard", "length_class": "sentence", "pair_type": "msmarco_ko"}
-```
-
-#### Data Distribution
-
-| Pair Type | Count | Description |
-|-----------|-------|-------------|
-| original | 151K | Wikipedia entities, synonyms |
-| msmarco_ko | 97K | MS MARCO Korean translation |
-| korquad | 54K | KorQuAD question-context pairs |
-| korquad_context | 54K | KorQuAD context-question pairs |
-| naver_news | 35K | News article pairs |
-| klue_nli | 15K | KLUE NLI entailment pairs |
-| klue_sts | 11K | KLUE STS similar sentences |
-| kobest_copa | 6K | KoBEST COPA reasoning pairs |
-| single_term | 448 | Explicit single-term synonyms |
-
-#### Curriculum Learning Phases
-
-v21.4 uses 3-phase curriculum learning:
-
-| Phase | Epochs | Focus | Lambda Self |
-|-------|--------|-------|-------------|
-| Phase 1 | 1-10 | Single-term pairs (100%) | 8.0 |
-| Phase 2 | 11-20 | Balanced mix (50% single-term) | 6.0 |
-| Phase 3 | 21-30 | Full dataset | 4.0 |
+| Parameter | Value |
+|-----------|-------|
+| GPUs | 8x NVIDIA B200 |
+| Per-GPU Batch | 32 |
+| Gradient Accumulation | 8 |
+| Effective Batch | 2048 |
+| Mixed Precision | BF16 |
+| NCCL NVLS | Disabled (B200 stability) |
+| broadcast_buffers | False (multi-forward-pass fix) |
+| find_unused_parameters | False |
 
 ---
 
@@ -426,19 +244,19 @@ POST /documents/_search
 상세 기술 문서는 [docs/](./docs/) 디렉토리를 참조하세요.
 
 ### Concepts
-- [Neural Sparse Model 개요](./docs/concepts/01-neural-sparse-overview.md) - Neural Sparse 검색의 정의 및 비교
-- [SPLADE Architecture Deep Dive](./docs/concepts/02-splade-architecture.md) - XLM-RoBERTa 기반 아키텍처 상세
-- [Model Operation](./docs/concepts/03-model-operation.md) - Forward Pass 및 Inference 동작
-- [Loss Functions 상세](./docs/concepts/04-loss-functions.md) - 6개 손실 함수 및 Knowledge Distillation
+- [Neural Sparse Model 개요](./docs/concepts/01-neural-sparse-overview.md)
+- [SPLADE Architecture Deep Dive](./docs/concepts/02-splade-architecture.md)
+- [Model Operation](./docs/concepts/03-model-operation.md)
+- [Loss Functions 상세](./docs/concepts/04-loss-functions.md)
 
 ### Guides
-- [Training 가이드](./docs/guides/training-guide.md) - 환경 설정부터 학습까지
-- [OpenSearch 통합 가이드](./docs/guides/opensearch-integration.md) - Index 생성, 쿼리, Hybrid Search
-- [Model Loading 가이드](./docs/guides/model-loading-guide.md) - 다양한 로딩 시나리오
+- [Training 가이드](./docs/guides/training-guide.md)
+- [OpenSearch 통합 가이드](./docs/guides/opensearch-integration.md)
+- [Model Loading 가이드](./docs/guides/model-loading-guide.md)
 
 ### Reference
-- [Hyperparameter 참조](./docs/reference/hyperparameters.md) - V26 설정 및 튜닝 가이드
-- [한국어 Stopword 처리](./docs/reference/korean-stopwords.md) - 177개 불용어 및 처리 메커니즘
+- [Hyperparameter 참조](./docs/reference/hyperparameters.md)
+- [한국어 Stopword 처리](./docs/reference/korean-stopwords.md)
 
 ---
 
@@ -446,32 +264,23 @@ POST /documents/_search
 
 | Version | Description | Status |
 |---------|-------------|--------|
-| **V26** | XLM-RoBERTa + Enhanced IDF + Special token fix + Extended stopwords | **Production** |
-| V27 | Travel/Tourism domain enhancement (in development) | Development |
-
-### V26 Technical Details
-
-| Aspect | Value |
-|--------|-------|
-| Base Model | `xlm-roberta-base` |
-| Special Token Handling | Excluded from IDF normalization + fixed penalty 100.0 |
-| FLOPS Weight | 0.010 |
-| Stopword Penalty | 15.0 |
-| IDF Alpha | 4.0 |
-| Stopword Count | 177 |
-| Semantic Ratio | 95.8% |
+| **V28** | Context-Gated expansion + DDP B200 x8 + V29 data (3.6M) | **Training** |
+| V27 | Travel/Tourism domain enhancement | Complete |
+| V26 | Enhanced IDF + Special token fix | Complete |
+| V25 | IDF-Aware FLOPS training | Complete |
+| V24 | XLM-RoBERTa baseline | Complete |
 
 ---
 
 ## Requirements
 
 - Python 3.12+
-- PyTorch 2.0+
-- transformers 4.35+
-- CUDA 11.8+ (for GPU training)
+- PyTorch 2.0+ (CUDA 12.x)
+- 8x NVIDIA B200 (or compatible multi-GPU)
+- Rust toolchain (for IDF computation)
 
 ```bash
-pip install torch transformers sentence-transformers opensearch-py tqdm scikit-learn matplotlib
+pip install torch transformers sentence-transformers opensearch-py tqdm scikit-learn matplotlib tensorboard
 ```
 
 ---
@@ -480,7 +289,7 @@ pip install torch transformers sentence-transformers opensearch-py tqdm scikit-l
 
 - [SPLADE: Sparse Lexical and Expansion Model](https://arxiv.org/abs/2107.05720)
 - [OpenSearch Neural Sparse Search](https://opensearch.org/docs/latest/search-plugins/neural-sparse-search/)
-- [A.X-Encoder](https://huggingface.co/skt/A.X-Encoder-base)
+- [opensearch-neural-sparse-encoding-multilingual-v1](https://huggingface.co/opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1)
 
 ## License
 

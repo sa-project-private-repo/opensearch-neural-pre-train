@@ -777,8 +777,12 @@ class DenseTeacherScorer(nn.Module):
         if self._encoder is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self._encoder = SentenceTransformer(self.model_name)
-                self._encoder = self._encoder.to(self.device)
+                self._encoder = SentenceTransformer(
+                    self.model_name, device=self.device
+                )
+                # Cap seq length to avoid 8192-token overhead
+                # (training texts are max ~192 tokens)
+                self._encoder.max_seq_length = 256
                 self._encoder.eval()
             except ImportError:
                 # Fallback to transformers
@@ -805,6 +809,7 @@ class DenseTeacherScorer(nn.Module):
             # sentence-transformers path
             embeddings = self._encoder.encode(
                 texts,
+                batch_size=64,
                 convert_to_tensor=True,
                 show_progress_bar=False,
             )

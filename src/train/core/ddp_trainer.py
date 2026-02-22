@@ -79,12 +79,32 @@ class DDPSPLADETrainer(SPLADETrainer):
             hooks=hooks,
         )
 
+        # Untie shared weights to avoid DDP inplace errors
+        # XLMRobertaForMaskedLM shares embeddings and lm_head weights
+        base_model = self.model
+        if hasattr(base_model, "model") and hasattr(base_model.model, "lm_head"):
+            lm_model = base_model.model
+            if hasattr(lm_model.lm_head, "decoder"):
+                if (
+                    lm_model.lm_head.decoder.weight
+                    is lm_model.roberta.embeddings.word_embeddings.weight
+                ):
+                    lm_model.lm_head.decoder.weight = (
+                        torch.nn.Parameter(
+                            lm_model.lm_head.decoder.weight.clone()
+                        )
+                    )
+                    logger.info("Untied lm_head/embedding weights for DDP")
+
         # Wrap model with DDP
+        # broadcast_buffers=False prevents position_ids buffer sync
+        # that causes inplace modification errors with multi-forward-pass
         self.model = DDP(
             self.model,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=True,
+            find_unused_parameters=False,
+            broadcast_buffers=False,
         )
 
         if self.is_main_process:
@@ -246,6 +266,7 @@ class DDPSPLADETrainer(SPLADETrainer):
 
         self.current_epoch = info["epoch"]
         self.global_step = info["step"]
+        self._resume_epoch = info["epoch"]
         self.best_val_loss = info.get(
             "metrics", {}
         ).get("best_val_loss", float("inf"))

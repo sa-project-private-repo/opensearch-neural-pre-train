@@ -119,3 +119,17 @@ OpenSearch Nerual Sparse Model 정보는 아래와 같습니다.
 - <https://huggingface.co/opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1>
 - <https://github.com/zhichao-aws/opensearch-sparse-model-tuning-sample>
 - ./sparse-retriever.pdf
+
+
+## Issue and Project Management
+
+- **Issues**: All tasks, bugs, and feature requests MUST be registered as GitHub Issues before starting work
+- **Projects**: All issues MUST be added to the appropriate GitHub Project board for tracking
+- **Todo Lists**: Before beginning any work, ensure the task is tracked in both GitHub Issues and Projects
+- Work should only commence after proper issue and project registration is complete
+
+
+## Release Management Rule
+
+- **Version Release Requirement**: Whenever the project version changes (major, minor, or patch), you **MUST** create a new GitHub release that matches the new version.
+- **Agent & Role Documentation**: When adding a new agent role (such as in `CLAUDE.md`), update all related documentation (README, workflow docs, agent lists) to ensure the new role is properly described and integrated into the workflow and release notes.

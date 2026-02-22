@@ -210,13 +210,18 @@ class CheckpointHook(TrainingHook):
         """Save checkpoint at end of epoch if appropriate."""
         self.last_epoch_metrics = metrics
 
+        # Only rank 0 saves in DDP to avoid race conditions
+        if hasattr(trainer, "is_main_process") and not trainer.is_main_process:
+            return
+
         if self.save_every_n_steps is not None:
             # Step-based saving takes precedence
             return
 
         if epoch % self.save_every_n_epochs == 0:
+            model = getattr(trainer.model, "module", trainer.model)
             self.checkpoint_manager.save(
-                model=trainer.model,
+                model=model,
                 optimizer=trainer.optimizer,
                 scheduler=trainer.scheduler,
                 epoch=epoch,
@@ -234,9 +239,14 @@ class CheckpointHook(TrainingHook):
         if self.save_every_n_steps is None:
             return
 
+        # Only rank 0 saves in DDP to avoid race conditions
+        if hasattr(trainer, "is_main_process") and not trainer.is_main_process:
+            return
+
         if step % self.save_every_n_steps == 0:
+            model = getattr(trainer.model, "module", trainer.model)
             self.checkpoint_manager.save(
-                model=trainer.model,
+                model=model,
                 optimizer=trainer.optimizer,
                 scheduler=trainer.scheduler,
                 epoch=trainer.current_epoch,

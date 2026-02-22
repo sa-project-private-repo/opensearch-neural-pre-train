@@ -30,7 +30,7 @@ data:
     - "data/v29.0/train_*.jsonl"
   val_files:
     - "data/v29.0/val.jsonl"
-  batch_size: 64           # per GPU
+  batch_size: 32           # per GPU (64 causes OOM on 250K vocab logits)
   max_length: 192
   num_workers: 4
 
@@ -92,7 +92,7 @@ training:
   weight_decay: 0.01
   warmup_ratio: 0.1
   gradient_clip: 1.0
-  gradient_accumulation_steps: 4  # effective = 64*4*8 = 2048
+  gradient_accumulation_steps: 8   # effective = 32*8*8 = 2048
   mixed_precision: "bf16"
   output_dir: "outputs/train_v28_ddp"
   experiment_name: "splade_v28_b200_x8"

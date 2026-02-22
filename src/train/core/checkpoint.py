@@ -281,7 +281,15 @@ class CheckpointManager:
 
         # Load model
         model_path = checkpoint_path / "model.pt"
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        state_dict = torch.load(model_path, map_location=device)
+        # Strip 'module.' prefix from DDP-saved checkpoints
+        if any(k.startswith("module.") for k in state_dict.keys()):
+            state_dict = {
+                k.removeprefix("module."): v
+                for k, v in state_dict.items()
+            }
+            logger.info("Stripped 'module.' prefix from DDP checkpoint")
+        model.load_state_dict(state_dict)
 
         # Load optimizer
         if optimizer is not None:
