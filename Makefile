@@ -1284,11 +1284,36 @@ v29-data-stats: ## Show V29 data statistics
 		echo "$(RED)No V29 data found. Run: make build-v29-data$(NC)"; \
 	fi
 
-mine-hard-negatives: ## Mine BM25 hard negatives for V29 data
-	@echo "Mining BM25 hard negatives..."
-	source .venv/bin/activate && python scripts/mine_hard_negatives.py \
+mine-hard-negatives: ## Mine TF-IDF hard negatives for V29 data
+	@echo "$(BLUE)Mining TF-IDF hard negatives (optimized)...$(NC)"
+	@$(PYTHON) scripts/mine_hard_negatives.py \
 		--data-dir data/v29.0 \
-		--max-corpus 500000
+		--max-corpus 50000 \
+		--batch-size 1000 \
+		--top-k 10 \
+		--shard-range all
+
+mine-hard-negatives-bg: ## Mine TF-IDF hard negatives in background
+	@echo "$(BLUE)Starting hard negative mining in background...$(NC)"
+	@mkdir -p outputs
+	@nohup $(PYTHON) scripts/mine_hard_negatives.py \
+		--data-dir data/v29.0 \
+		--max-corpus 50000 \
+		--batch-size 1000 \
+		--top-k 10 \
+		--shard-range all \
+		> outputs/mine_hard_negatives.log 2>&1 &
+	@echo "$(GREEN)Mining started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'mine_hard_negatives' | tail -1)"
+	@echo "Log: outputs/mine_hard_negatives.log"
+
+logs-mining: ## Show hard negative mining logs
+	@if [ -f outputs/mine_hard_negatives.log ]; then \
+		tail -f outputs/mine_hard_negatives.log; \
+	else \
+		echo "$(RED)No logs found. Run: make mine-hard-negatives-bg$(NC)"; \
+	fi
 
 ##@ V28 DDP Training (B200 x8)
 
