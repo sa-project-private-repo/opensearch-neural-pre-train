@@ -111,10 +111,20 @@ def generate_report(
         # Compare to BM25 baseline
         if "bm25" in metrics and best_method != "bm25":
             bm25_recall = metrics["bm25"].recall_at_1
-            improvement = (best_metrics.recall_at_1 - bm25_recall) / bm25_recall * 100
-            lines.append(
-                f"- Recall@1 improvement over BM25: {improvement:+.1f}%"
-            )
+            if bm25_recall > 0:
+                improvement = (
+                    (best_metrics.recall_at_1 - bm25_recall)
+                    / bm25_recall
+                    * 100
+                )
+                lines.append(
+                    f"- Recall@1 improvement over BM25: "
+                    f"{improvement:+.1f}%"
+                )
+            else:
+                lines.append(
+                    "- BM25 Recall@1 is 0 (no results)"
+                )
 
         # Neural sparse vs semantic
         if "neural_sparse" in metrics and "semantic" in metrics:

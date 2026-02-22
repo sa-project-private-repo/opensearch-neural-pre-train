@@ -294,7 +294,7 @@ def main():
         "--dataset",
         type=str,
         default="ko-strategyqa",
-        choices=["ko-strategyqa"],
+        choices=["ko-strategyqa", "miracl-ko", "mrtydi-ko"],
         help="Dataset to benchmark",
     )
     parser.add_argument(
@@ -357,9 +357,9 @@ def main():
             runner.data = load_hf_dataset(args.dataset, args.max_queries)
 
         runner.run_benchmark(include_hybrid=True, methods=args.methods)
+        runner.save_results(output_dir)
         report = runner.generate_report(output_dir / "report.md")
         print("\n" + report)
-        runner.save_results(output_dir)
 
     except Exception as e:
         logger.error(f"Benchmark failed: {e}", exc_info=True)
