@@ -1,0 +1,45 @@
+# Korean MLM Pre-training Configuration
+#
+# Target hardware: B200 x8 (8 GPUs)
+# Effective batch size = batch_size * grad_accum * num_gpus
+#                      = 32 * 4 * 8 = 1024
+#
+# Usage:
+#   torchrun --nproc_per_node=8 -m src.train.cli.pretrain_mlm \
+#     --config configs/pretrain_mlm.yaml
+
+# Model
+model_name: "xlm-roberta-base"
+
+# Data
+data_dir: "data/mlm_korean"
+max_length: 512
+
+# Output
+output_dir: "outputs/pretrain_mlm"
+
+# Training duration
+epochs: 3
+
+# Batch / memory
+batch_size: 32           # per GPU; 32 * 512 tokens = 16K tokens/GPU
+grad_accum: 4            # effective = 32 * 4 * 8 GPUs = 1024
+
+# Optimiser
+lr: 5.0e-5
+weight_decay: 0.01
+warmup_ratio: 0.05       # 5% of total steps
+
+# MLM objective
+mlm_probability: 0.15
+
+# Checkpointing & evaluation
+save_steps: 2000
+eval_steps: 1000
+logging_steps: 100
+
+# DataLoader
+dataloader_workers: 4
+
+# Reproducibility
+seed: 42
