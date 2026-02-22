@@ -297,13 +297,11 @@ class NeuralSparseEncoderV28:
     PyTorch checkpoint (not HuggingFace format) to preserve
     the context gate weights.
 
-    WARNING: V28 training collapsed due to aggressive Korean filtering.
-    The model produces near-zero sparse vectors. Use V26 instead.
     """
 
     def __init__(
         self,
-        checkpoint_path: Union[str, Path] = "outputs/train_v28/checkpoint_epoch25_step280825/model.pt",
+        checkpoint_path: Union[str, Path] = "outputs/train_v28_ddp/checkpoint_epoch25_step41850/model.pt",
         device: str = "cuda",
         max_length: int = 192,
     ):
@@ -318,11 +316,6 @@ class NeuralSparseEncoderV28:
         self.device = device
         self.max_length = max_length
         checkpoint_path = Path(checkpoint_path)
-
-        logger.warning(
-            "V28 model training collapsed - it produces near-zero vectors. "
-            "Use V26 (NeuralSparseEncoder) for benchmarking instead."
-        )
         logger.info(f"Loading V28 neural sparse model from: {checkpoint_path}")
 
         # Load tokenizer from base model
@@ -343,7 +336,6 @@ class NeuralSparseEncoderV28:
         self.model.eval()
 
         self.vocab_size = self.tokenizer.vocab_size
-        self._collapse_warned = False
 
         # Special token IDs to exclude
         self.special_token_ids = {
@@ -407,7 +399,10 @@ class NeuralSparseEncoderV28:
         batch_vectors = []
         for j in range(sparse_repr.size(0)):
             vec = sparse_repr[j].cpu()
-            nonzero_mask = vec > 0
+            # Min threshold: OpenSearch requires positive normal
+            # floats (>= 1.17549435e-38). Use 1e-3 to also
+            # filter noise from context gate.
+            nonzero_mask = vec > 1e-3
             nonzero_indices = nonzero_mask.nonzero(as_tuple=True)[0]
 
             sparse_dict = {}
@@ -426,14 +421,6 @@ class NeuralSparseEncoderV28:
                     reverse=True,
                 )
                 sparse_dict = dict(sorted_items[:top_k])
-
-            # Warn if empty (V28 collapse issue)
-            if len(sparse_dict) == 0 and not self._collapse_warned:
-                logger.warning(
-                    "V28 produced 0 tokens - this is expected due to training collapse. "
-                    "V28 benchmark results will be invalid."
-                )
-                self._collapse_warned = True
 
             batch_vectors.append(sparse_dict)
 
@@ -517,6 +504,9 @@ def create_encoders(config: BenchmarkConfig) -> tuple:
     """
     Create both encoders from config.
 
+    Auto-detects V28 context gate checkpoint and uses
+    NeuralSparseEncoderV28 when available.
+
     Returns:
         Tuple of (dense_encoder, sparse_encoder)
     """
@@ -524,13 +514,31 @@ def create_encoders(config: BenchmarkConfig) -> tuple:
         model_name=config.bge_m3_model,
         device=config.device,
     )
-    # Use max_length from config if available
-    max_length = getattr(config, "neural_sparse_max_length", 64)
-    sparse_encoder = NeuralSparseEncoder(
-        model_path=config.neural_sparse_path,
-        device=config.device,
-        max_length=max_length,
-    )
+    max_length = getattr(config, "neural_sparse_max_length", 192)
+
+    # Check for V28 context gate checkpoint
+    context_gate_path = Path(config.neural_sparse_path) / "context_gate.pt"
+    if context_gate_path.exists():
+        # V28: load full model with context gate from DDP checkpoint
+        checkpoint_path = getattr(
+            config,
+            "v28_checkpoint_path",
+            "outputs/train_v28_ddp/checkpoint_epoch25_step41850/model.pt",
+        )
+        logger.info(
+            f"Context gate detected, using NeuralSparseEncoderV28"
+        )
+        sparse_encoder = NeuralSparseEncoderV28(
+            checkpoint_path=checkpoint_path,
+            device=config.device,
+            max_length=max_length,
+        )
+    else:
+        sparse_encoder = NeuralSparseEncoder(
+            model_path=config.neural_sparse_path,
+            device=config.device,
+            max_length=max_length,
+        )
     return dense_encoder, sparse_encoder
 
 
