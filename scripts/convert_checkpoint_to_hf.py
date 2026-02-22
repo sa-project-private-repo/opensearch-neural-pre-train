@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.model.splade_xlmr import SPLADEDocXLMR, SPLADEDocContextGated
+from src.model.splade_xlmr import SPLADEDocXLMR, SPLADEDocContextGated, SPLADEDocV29ContextGated
 
 
 def convert_checkpoint(
@@ -51,7 +51,9 @@ def convert_checkpoint(
     print(f"Loading checkpoint: {model_file}")
 
     # Create model and load state dict
-    if model_class == "SPLADEDocContextGated":
+    if model_class == "SPLADEDocV29ContextGated":
+        model = SPLADEDocV29ContextGated(model_name=model_name, pooling="sum", use_mlm_head=True)
+    elif model_class == "SPLADEDocContextGated":
         model = SPLADEDocContextGated(model_name=model_name, use_mlm_head=True)
     else:
         model = SPLADEDocXLMR(model_name=model_name, use_mlm_head=True)
@@ -128,7 +130,7 @@ def main():
     parser.add_argument(
         "--model-class",
         default="SPLADEDocXLMR",
-        choices=["SPLADEDocXLMR", "SPLADEDocContextGated"],
+        choices=["SPLADEDocXLMR", "SPLADEDocContextGated", "SPLADEDocV29ContextGated"],
         help="Model class (default: SPLADEDocXLMR)"
     )
 

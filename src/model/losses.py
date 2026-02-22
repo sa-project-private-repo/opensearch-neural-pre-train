@@ -1980,3 +1980,500 @@ class SPLADELossV28(SPLADELossV26):
         """Update language filtering weight."""
         self.lambda_language = lambda_language
         self.language_penalty_max = lambda_language
+
+
+class SPLADELossV29(SPLADELossV28):
+    """
+    SPLADE loss v29 with SPLADE v2 style FLOPS regularization.
+
+    Key improvements over V28:
+    - Separate FLOPS regularization for query (lambda_q) and document (lambda_d)
+    - Quadratic lambda warmup support via external scheduler
+    - Margin-MSE distillation support from cross-encoder
+
+    Based on SPLADE v2 paper (Formal et al., 2022):
+    - L_FLOPS = sum_j (1/N * sum_i w_j^(d_i))^2
+    - L = L_rank + λ_q * L_reg^q + λ_d * L_reg^d
+    """
+
+    def __init__(
+        self,
+        idf_weights: torch.Tensor,
+        special_token_ids: set,
+        # V29: Separate FLOPS weights
+        lambda_flops_q: float = 1e-4,
+        lambda_flops_d: float = 1e-3,
+        # V29: Distillation
+        use_margin_mse: bool = False,
+        # Inherited from V28
+        korean_token_ids: Optional[set] = None,
+        lambda_language: float = 0.3,
+        non_korean_penalty: float = 5.0,
+        korean_penalty: float = 0.0,
+        enable_language_filtering: bool = True,
+        # Standard loss weights
+        lambda_infonce: float = 3.0,
+        lambda_self: float = 0.5,
+        lambda_positive: float = 2.0,
+        lambda_margin: float = 0.0,
+        lambda_flops: float = 0.0,  # Disabled, use lambda_flops_q/d instead
+        lambda_min_act: float = 1.0,
+        lambda_kd: float = 2.0,
+        # Hyperparameters
+        temperature: float = 0.07,
+        margin: float = 0.3,
+        top_k: int = 5,
+        min_activation: float = 0.5,
+        kd_temperature: float = 3.0,
+        # IDF configuration
+        idf_alpha: float = 4.0,
+        special_penalty: float = 100.0,
+        # Stopword masking
+        stopword_mask: Optional[torch.Tensor] = None,
+        stopword_penalty: float = 15.0,
+        # Teacher model
+        teacher_model: Optional[DenseTeacherScorer] = None,
+    ):
+        """
+        Initialize SPLADE v29 loss with separate FLOPS regularization.
+
+        Args:
+            idf_weights: Pre-computed IDF weights [vocab_size]
+            special_token_ids: Set of special token IDs
+            lambda_flops_q: FLOPS regularization weight for queries
+            lambda_flops_d: FLOPS regularization weight for documents
+            use_margin_mse: Use margin-MSE distillation from cross-encoder
+            Other args: Inherited from SPLADELossV28
+        """
+        super().__init__(
+            idf_weights=idf_weights,
+            special_token_ids=special_token_ids,
+            korean_token_ids=korean_token_ids,
+            lambda_language=lambda_language,
+            non_korean_penalty=non_korean_penalty,
+            korean_penalty=korean_penalty,
+            enable_language_filtering=enable_language_filtering,
+            lambda_infonce=lambda_infonce,
+            lambda_self=lambda_self,
+            lambda_positive=lambda_positive,
+            lambda_margin=lambda_margin,
+            lambda_flops=lambda_flops,  # Will be 0, handled separately
+            lambda_min_act=lambda_min_act,
+            lambda_kd=lambda_kd,
+            temperature=temperature,
+            margin=margin,
+            top_k=top_k,
+            min_activation=min_activation,
+            kd_temperature=kd_temperature,
+            idf_alpha=idf_alpha,
+            special_penalty=special_penalty,
+            stopword_mask=stopword_mask,
+            stopword_penalty=stopword_penalty,
+            teacher_model=teacher_model,
+        )
+
+        # V29 specific
+        self.lambda_flops_q = lambda_flops_q
+        self.lambda_flops_d = lambda_flops_d
+        self.use_margin_mse = use_margin_mse
+
+    def _compute_flops_v29(self, sparse_repr: torch.Tensor) -> torch.Tensor:
+        """
+        Compute SPLADE v2 style FLOPS regularization (unweighted).
+
+        L_FLOPS = sum_j (mean_activation_j)^2
+
+        Unweighted to avoid IDF bias that causes rare foreign tokens
+        to be activated. Language filtering is handled separately by
+        V28 language loss component.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            FLOPS regularization loss
+        """
+        # Average activation per token across batch
+        mean_activation = sparse_repr.mean(dim=0)  # [vocab_size]
+
+        # Sum of squared mean activations (unweighted SPLADE v2)
+        flops_loss = (mean_activation ** 2).sum()
+
+        return flops_loss
+
+    def _compute_margin_mse(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        teacher_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute margin-MSE distillation loss.
+
+        Args:
+            anchor_repr: Query representations [batch, vocab]
+            positive_repr: Positive document representations [batch, vocab]
+            negative_repr: Negative document representations [batch, vocab]
+            teacher_scores: Teacher scores [batch, 2] (pos_score, neg_score)
+
+        Returns:
+            Margin-MSE loss
+        """
+        # Student scores (dot product)
+        student_pos = (anchor_repr * positive_repr).sum(dim=-1)
+        student_neg = (anchor_repr * negative_repr).sum(dim=-1)
+        student_margin = student_pos - student_neg
+
+        # Teacher margin
+        teacher_margin = teacher_scores[:, 0] - teacher_scores[:, 1]
+
+        # MSE on margins
+        margin_mse = F.mse_loss(student_margin, teacher_margin)
+
+        return margin_mse
+
+    def forward(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        anchor_input_ids: torch.Tensor,
+        anchor_attention_mask: torch.Tensor,
+        positive_input_ids: torch.Tensor,
+        positive_attention_mask: torch.Tensor,
+        anchor_texts: Optional[list] = None,
+        positive_texts: Optional[list] = None,
+        teacher_scores: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Compute combined loss with V29 FLOPS regularization.
+
+        Args:
+            anchor_repr: Query sparse representations [batch_size, vocab_size]
+            positive_repr: Positive doc sparse representations [batch_size, vocab_size]
+            negative_repr: Negative doc sparse representations [batch_size, vocab_size]
+            anchor_input_ids: Query token IDs
+            anchor_attention_mask: Query attention mask
+            positive_input_ids: Positive token IDs
+            positive_attention_mask: Positive attention mask
+            anchor_texts: Raw query texts for teacher scoring
+            positive_texts: Raw positive texts for teacher scoring
+            teacher_scores: Pre-computed teacher scores [batch, 2]
+
+        Returns:
+            total_loss: Combined loss value
+            loss_dict: Dictionary with individual loss components
+        """
+        # Get V28 base losses (with lambda_flops=0)
+        total_loss, loss_dict = super().forward(
+            anchor_repr=anchor_repr,
+            positive_repr=positive_repr,
+            negative_repr=negative_repr,
+            anchor_input_ids=anchor_input_ids,
+            anchor_attention_mask=anchor_attention_mask,
+            positive_input_ids=positive_input_ids,
+            positive_attention_mask=positive_attention_mask,
+            anchor_texts=anchor_texts,
+            positive_texts=positive_texts,
+            teacher_scores=teacher_scores if not self.use_margin_mse else None,
+        )
+
+        # V29: Separate FLOPS for query and document
+        flops_q = self._compute_flops_v29(anchor_repr)
+        flops_d = self._compute_flops_v29(positive_repr) + self._compute_flops_v29(negative_repr)
+
+        flops_loss = self.lambda_flops_q * flops_q + self.lambda_flops_d * flops_d
+        total_loss = total_loss + flops_loss
+
+        loss_dict["flops_q"] = flops_q.item()
+        loss_dict["flops_d"] = flops_d.item()
+        loss_dict["flops_total"] = flops_loss.item()
+
+        # V29: Margin-MSE distillation
+        if self.use_margin_mse and teacher_scores is not None:
+            margin_mse = self._compute_margin_mse(
+                anchor_repr, positive_repr, negative_repr, teacher_scores
+            )
+            total_loss = total_loss + self.lambda_kd * margin_mse
+            loss_dict["margin_mse"] = margin_mse.item()
+
+        return total_loss, loss_dict
+
+    def update_lambda_flops(self, lambda_q: float, lambda_d: float) -> None:
+        """Update FLOPS regularization weights (for warmup scheduler)."""
+        self.lambda_flops_q = lambda_q
+        self.lambda_flops_d = lambda_d
+
+
+class SPLADELossV30(SPLADELossV26):
+    """
+    SPLADE loss v30 with simplified architecture.
+
+    V30: Simplified loss - back to V26 baseline architecture.
+    Only 4 active components: InfoNCE + IDF-FLOPS + Language + KD.
+    Removes: self-reconstruction, positive activation, min activation,
+    separate q/d FLOPS.
+
+    Key design:
+    - Inherits from V26 (not V28/V29) for proven baseline
+    - Disables 4 loss components via zero weights
+    - Adds V28-style Korean language filtering
+    - Reduced KD weight (1.0 vs 2.0)
+    - Simplified for faster iteration and clearer signal attribution
+    """
+
+    def __init__(
+        self,
+        idf_weights: torch.Tensor,
+        special_token_ids: set,
+        # V30 language filtering (from V28)
+        korean_token_ids: Optional[set] = None,
+        lambda_language: float = 0.3,
+        non_korean_penalty: float = 5.0,
+        enable_language_filtering: bool = True,
+        # Override V26 defaults - simplified
+        lambda_infonce: float = 3.0,
+        lambda_self: float = 0.0,  # DISABLED
+        lambda_positive: float = 0.0,  # DISABLED
+        lambda_margin: float = 0.0,  # DISABLED
+        lambda_flops: float = 0.010,  # V26-style IDF-weighted
+        lambda_min_act: float = 0.0,  # DISABLED
+        lambda_kd: float = 1.0,  # Reduced from V26's 2.0
+        # Standard hyperparameters
+        temperature: float = 0.07,
+        kd_temperature: float = 3.0,
+        idf_alpha: float = 4.0,
+        special_penalty: float = 100.0,
+        stopword_mask: Optional[torch.Tensor] = None,
+        stopword_penalty: float = 15.0,
+        teacher_model: Optional[DenseTeacherScorer] = None,
+    ):
+        """
+        Initialize SPLADE v30 loss with simplified components.
+
+        Args:
+            idf_weights: Pre-computed IDF weights [vocab_size] - REQUIRED
+            special_token_ids: Set of special token IDs
+            korean_token_ids: Set of Korean token IDs for language filtering
+            lambda_language: Weight for language filtering loss
+            non_korean_penalty: Penalty for non-Korean token activation
+            enable_language_filtering: Whether to apply language filtering
+            lambda_infonce: Weight for InfoNCE loss (active)
+            lambda_self: Self-reconstruction weight (disabled = 0.0)
+            lambda_positive: Positive activation weight (disabled = 0.0)
+            lambda_margin: Triplet margin weight (disabled = 0.0)
+            lambda_flops: FLOPS regularization weight (active, V26-style)
+            lambda_min_act: Minimum activation weight (disabled = 0.0)
+            lambda_kd: Knowledge distillation weight (active, reduced)
+            temperature: InfoNCE temperature
+            kd_temperature: Knowledge distillation temperature
+            idf_alpha: IDF exponential scaling factor
+            special_penalty: Fixed penalty for special tokens
+            stopword_mask: Binary mask for stopwords (1=keep, 0=mask)
+            stopword_penalty: Extra penalty multiplier for stopwords
+            teacher_model: Dense teacher for knowledge distillation
+        """
+        # Initialize V26 with simplified weights
+        super().__init__(
+            idf_weights=idf_weights,
+            special_token_ids=special_token_ids,
+            lambda_infonce=lambda_infonce,
+            lambda_self=lambda_self,
+            lambda_positive=lambda_positive,
+            lambda_margin=lambda_margin,
+            lambda_flops=lambda_flops,
+            lambda_min_act=lambda_min_act,
+            lambda_kd=lambda_kd,
+            temperature=temperature,
+            kd_temperature=kd_temperature,
+            idf_alpha=idf_alpha,
+            special_penalty=special_penalty,
+            stopword_mask=stopword_mask,
+            stopword_penalty=stopword_penalty,
+            teacher_model=teacher_model,
+        )
+
+        # V30: Language filtering (from V28)
+        self.enable_language_filtering = enable_language_filtering
+        self.lambda_language = lambda_language
+        self.non_korean_penalty = non_korean_penalty
+        self.korean_token_ids = korean_token_ids or set()
+
+        # Build non-Korean mask for penalty computation
+        if enable_language_filtering and korean_token_ids:
+            self._non_korean_mask = self._build_non_korean_mask(
+                idf_weights.shape[0]
+            )
+            self.register_buffer("non_korean_mask", self._non_korean_mask)
+        else:
+            self.non_korean_mask = None
+
+        # V30 metrics
+        self._korean_ratio_sum = 0.0
+        self._korean_ratio_count = 0
+
+    def _build_non_korean_mask(self, vocab_size: int) -> torch.Tensor:
+        """
+        Build penalty mask for non-Korean tokens.
+
+        Returns:
+            Mask where 1.0 = non-Korean (penalize), 0.0 = Korean (preserve)
+        """
+        mask = torch.ones(vocab_size)
+
+        # Korean tokens get 0 (no penalty)
+        for token_id in self.korean_token_ids:
+            if 0 <= token_id < vocab_size:
+                mask[token_id] = 0.0
+
+        # Special tokens also get 0 (handled separately)
+        for token_id in self.special_token_ids:
+            if 0 <= token_id < vocab_size:
+                mask[token_id] = 0.0
+
+        return mask
+
+    def _compute_language_penalty(
+        self,
+        sparse_repr: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute penalty for non-Korean token activation.
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Scalar penalty loss
+        """
+        if self.non_korean_mask is None:
+            return torch.tensor(0.0, device=sparse_repr.device)
+
+        # Penalize activation of non-Korean tokens
+        # non_korean_mask: 1.0 for non-Korean, 0.0 for Korean
+        non_korean_activation = sparse_repr * self.non_korean_mask.to(
+            sparse_repr.device
+        )
+
+        # Mean activation of non-Korean tokens (should be minimized)
+        penalty = non_korean_activation.sum(dim=-1).mean()
+
+        return penalty
+
+    def _compute_korean_ratio(self, sparse_repr: torch.Tensor) -> float:
+        """
+        Compute ratio of Korean to non-Korean token activations.
+
+        Higher ratio = better (Korean tokens dominating).
+
+        Args:
+            sparse_repr: Sparse representations [batch_size, vocab_size]
+
+        Returns:
+            Ratio of mean Korean activation to mean non-Korean activation
+        """
+        if self.non_korean_mask is None:
+            return 1.0
+
+        mean_activation = sparse_repr.mean(dim=0)  # [vocab_size]
+
+        korean_mask = self.non_korean_mask == 0
+        non_korean_mask = self.non_korean_mask == 1
+
+        korean_mean = mean_activation[korean_mask].mean().item()
+        non_korean_mean = mean_activation[non_korean_mask].mean().item() + 1e-8
+
+        return korean_mean / non_korean_mean
+
+    def forward(
+        self,
+        anchor_repr: torch.Tensor,
+        positive_repr: torch.Tensor,
+        negative_repr: torch.Tensor,
+        anchor_input_ids: torch.Tensor,
+        anchor_attention_mask: torch.Tensor,
+        positive_input_ids: torch.Tensor,
+        positive_attention_mask: torch.Tensor,
+        anchor_texts: Optional[list] = None,
+        positive_texts: Optional[list] = None,
+        teacher_scores: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Compute combined loss with V30 simplification.
+
+        Args:
+            anchor_repr: Anchor sparse representations [batch_size, vocab_size]
+            positive_repr: Positive sparse representations
+            negative_repr: Negative sparse representations
+            anchor_input_ids: Anchor token IDs [batch_size, seq_len]
+            anchor_attention_mask: Anchor attention mask [batch_size, seq_len]
+            positive_input_ids: Positive token IDs [batch_size, seq_len]
+            positive_attention_mask: Positive attention mask [batch_size, seq_len]
+            anchor_texts: Raw anchor texts for teacher scoring
+            positive_texts: Raw positive texts for teacher scoring
+            teacher_scores: Pre-computed teacher scores
+
+        Returns:
+            total_loss: Combined loss value
+            loss_dict: Dictionary with individual loss components
+        """
+        # Get V26 base losses (most will be 0 due to zero weights)
+        total_loss, loss_dict = super().forward(
+            anchor_repr=anchor_repr,
+            positive_repr=positive_repr,
+            negative_repr=negative_repr,
+            anchor_input_ids=anchor_input_ids,
+            anchor_attention_mask=anchor_attention_mask,
+            positive_input_ids=positive_input_ids,
+            positive_attention_mask=positive_attention_mask,
+            anchor_texts=anchor_texts,
+            positive_texts=positive_texts,
+            teacher_scores=teacher_scores,
+        )
+
+        # V30: Add language filtering penalty
+        if (
+            self.enable_language_filtering
+            and self.non_korean_mask is not None
+        ):
+            lang_penalty = self._compute_language_penalty(anchor_repr)
+            total_loss = total_loss + self.lambda_language * lang_penalty
+            loss_dict["language_penalty"] = lang_penalty.item()
+
+            # Track Korean ratio
+            korean_ratio = self._compute_korean_ratio(anchor_repr)
+            self._korean_ratio_sum += korean_ratio
+            self._korean_ratio_count += 1
+            loss_dict["korean_ratio"] = korean_ratio
+        else:
+            loss_dict["language_penalty"] = 0.0
+            loss_dict["korean_ratio"] = 1.0
+
+        return total_loss, loss_dict
+
+    def get_average_korean_ratio(self) -> float:
+        """
+        Get average Korean token ratio since last reset.
+
+        Returns:
+            Average ratio of Korean to non-Korean token activations
+        """
+        if self._korean_ratio_count == 0:
+            return 0.0
+        return self._korean_ratio_sum / self._korean_ratio_count
+
+    def reset_metrics(self) -> None:
+        """Reset accumulated metrics for both V26 and V30."""
+        super().reset_metrics()
+        self._korean_ratio_sum = 0.0
+        self._korean_ratio_count = 0
+
+    def update_language_weight(self, lambda_language: float) -> None:
+        """
+        Update language filtering weight.
+
+        Args:
+            lambda_language: New language filtering weight
+        """
+        self.lambda_language = lambda_language

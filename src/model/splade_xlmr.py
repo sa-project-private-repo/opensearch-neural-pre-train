@@ -90,7 +90,7 @@ class SPLADEDocXLMR(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,  # Not used by RoBERTa
+        token_type_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass producing sparse representations.
@@ -98,7 +98,7 @@ class SPLADEDocXLMR(nn.Module):
         Args:
             input_ids: Input token IDs [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len]
-            token_type_ids: Ignored (XLM-RoBERTa doesn't use token types)
+            token_type_ids: Token type IDs (pass through to avoid HF internal buffer issues)
 
         Returns:
             sparse_repr: Sparse document representation [batch_size, vocab_size]
@@ -108,9 +108,11 @@ class SPLADEDocXLMR(nn.Module):
 
         if self.use_mlm_head:
             # Use MLM head for full vocabulary coverage
+            # Pass token_type_ids to avoid HuggingFace's internal buffer inplace ops
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
             )
             # logits: [batch, seq_len, vocab_size]
             logits = outputs.logits
@@ -536,16 +538,18 @@ class SPLADEDocContextGated(SPLADEDocXLMR):
         Args:
             input_ids: Input token IDs [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len]
-            token_type_ids: Ignored (XLM-RoBERTa doesn't use token types)
+            token_type_ids: Token type IDs (pass through to avoid HF internal buffer issues)
 
         Returns:
             sparse_repr: Context-gated sparse representation [batch, vocab_size]
             token_weights: Per-position importance [batch, seq_len]
         """
         # Get MLM logits from base model
+        # Pass token_type_ids to avoid HuggingFace's internal buffer inplace ops
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             output_hidden_states=True,
         )
         logits = outputs.logits  # [batch, seq_len, vocab_size]
@@ -596,6 +600,201 @@ class SPLADEDocContextGated(SPLADEDocXLMR):
         hidden_states = outputs.hidden_states[-1]
 
         return self.context_gate(hidden_states, attention_mask)
+
+
+class SPLADEDocV29(SPLADEDocXLMR):
+    """
+    SPLADE v29 model with configurable pooling strategy.
+
+    Based on SPLADE v2 paper:
+    - Max pooling (Eq. 6): w_j = max_i log(1 + ReLU(w_ij))
+    - Sum pooling (original): w_j = sum_i log(1 + ReLU(w_ij))
+
+    Max pooling improves MRR by ~2 points in original paper.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "xlm-roberta-base",
+        dropout: float = 0.1,
+        use_mlm_head: bool = True,
+        pooling: str = "max",
+    ):
+        """
+        Initialize V29 SPLADE model.
+
+        Args:
+            model_name: XLM-RoBERTa model name
+            dropout: Dropout rate
+            use_mlm_head: Use MLM head for vocabulary expansion
+            pooling: Pooling strategy - "max" (SPLADE v2) or "sum" (original)
+        """
+        super().__init__(
+            model_name=model_name,
+            dropout=dropout,
+            use_mlm_head=use_mlm_head,
+        )
+
+        if pooling not in ("max", "sum"):
+            raise ValueError(f"pooling must be 'max' or 'sum', got {pooling}")
+
+        self.pooling = pooling
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass with configurable pooling.
+
+        Args:
+            input_ids: Input token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            token_type_ids: Token type IDs (pass through to avoid HF buffer issues)
+
+        Returns:
+            sparse_repr: Sparse document representation [batch_size, vocab_size]
+            token_weights: Per-position importance [batch_size, seq_len]
+        """
+        batch_size, seq_len = input_ids.shape
+
+        # Pass token_type_ids to base model
+        if token_type_ids is None:
+            token_type_ids = torch.zeros_like(input_ids)
+
+        if self.use_mlm_head:
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+            )
+            logits = outputs.logits  # [batch, seq_len, vocab_size]
+        else:
+            outputs = self.transformer(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            hidden_states = outputs.last_hidden_state
+            importance = self.token_importance(hidden_states).squeeze(-1)
+            logits = self._create_input_only_logits(input_ids, importance, attention_mask)
+
+        # Apply ReLU and log(1+x) for sparsity
+        sparse_scores = torch.log1p(self.relu(logits))
+
+        # Mask padding positions
+        mask = attention_mask.unsqueeze(-1).float()
+        sparse_scores = sparse_scores * mask
+
+        # Pooling across sequence positions
+        if self.pooling == "max":
+            # SPLADE v2 style max pooling
+            sparse_repr, _ = sparse_scores.max(dim=1)
+        else:
+            # Original sum pooling
+            sparse_repr = sparse_scores.sum(dim=1)
+
+        # Per-position token weights
+        token_weights = sparse_scores.max(dim=-1).values
+
+        return sparse_repr, token_weights
+
+
+class SPLADEDocV29ContextGated(SPLADEDocContextGated):
+    """
+    Context-gated SPLADE v29 model with configurable pooling.
+
+    Combines V28's context gate with V29's max pooling.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "xlm-roberta-base",
+        dropout: float = 0.1,
+        use_mlm_head: bool = True,
+        gate_hidden: int = 256,
+        gate_heads: int = 4,
+        pooling: str = "max",
+    ):
+        """
+        Initialize context-gated V29 model.
+
+        Args:
+            model_name: XLM-RoBERTa model name
+            dropout: Dropout rate
+            use_mlm_head: Use MLM head for expansion
+            gate_hidden: Hidden dimension for context gate
+            gate_heads: Number of attention heads in context gate
+            pooling: Pooling strategy - "max" or "sum"
+        """
+        super().__init__(
+            model_name=model_name,
+            dropout=dropout,
+            use_mlm_head=use_mlm_head,
+            gate_hidden=gate_hidden,
+            gate_heads=gate_heads,
+        )
+
+        if pooling not in ("max", "sum"):
+            raise ValueError(f"pooling must be 'max' or 'sum', got {pooling}")
+
+        self.pooling = pooling
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass with context gating and configurable pooling.
+
+        Args:
+            input_ids: Input token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len]
+            token_type_ids: Token type IDs
+
+        Returns:
+            sparse_repr: Context-gated sparse representation [batch, vocab_size]
+            token_weights: Per-position importance [batch, seq_len]
+        """
+        # Get MLM logits and hidden states
+        if token_type_ids is None:
+            token_type_ids = torch.zeros_like(input_ids)
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            output_hidden_states=True,
+        )
+        logits = outputs.logits
+        hidden_states = outputs.hidden_states[-1]
+
+        # Compute context gate
+        gate = self.context_gate(hidden_states, attention_mask)
+
+        # Apply gate to logits
+        gated_logits = logits * gate.unsqueeze(1)
+
+        # Sparsification
+        sparse_scores = torch.log1p(self.relu(gated_logits))
+
+        # Mask padding
+        mask = attention_mask.unsqueeze(-1).float()
+        sparse_scores = sparse_scores * mask
+
+        # Pooling
+        if self.pooling == "max":
+            sparse_repr, _ = sparse_scores.max(dim=1)
+        else:
+            sparse_repr = sparse_scores.sum(dim=1)
+
+        # Per-position weights
+        token_weights = sparse_scores.max(dim=-1).values
+
+        return sparse_repr, token_weights
 
 
 def load_splade_xlmr(
@@ -663,6 +862,59 @@ def load_splade_context_gated(
         gate_hidden=gate_hidden,
         gate_heads=gate_heads,
     )
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+
+    model.load_state_dict(state_dict, strict=False)
+    model = model.to(device)
+    model.eval()
+
+    return model
+
+
+def load_splade_v29(
+    checkpoint_path: str,
+    model_name: str = "xlm-roberta-base",
+    pooling: str = "max",
+    use_context_gate: bool = False,
+    gate_hidden: int = 256,
+    gate_heads: int = 4,
+    device: str = "cuda",
+) -> Union[SPLADEDocV29, SPLADEDocV29ContextGated]:
+    """
+    Load trained V29 SPLADE model from checkpoint.
+
+    Args:
+        checkpoint_path: Path to model checkpoint
+        model_name: Base model name
+        pooling: Pooling strategy ("max" or "sum")
+        use_context_gate: Whether model uses context gate
+        gate_hidden: Gate hidden dimension
+        gate_heads: Gate attention heads
+        device: Target device
+
+    Returns:
+        Loaded V29 model
+    """
+    if use_context_gate:
+        model = SPLADEDocV29ContextGated(
+            model_name=model_name,
+            pooling=pooling,
+            gate_hidden=gate_hidden,
+            gate_heads=gate_heads,
+        )
+    else:
+        model = SPLADEDocV29(
+            model_name=model_name,
+            pooling=pooling,
+        )
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
 

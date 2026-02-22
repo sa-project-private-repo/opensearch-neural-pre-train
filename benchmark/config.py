@@ -26,7 +26,7 @@ class BenchmarkConfig:
     # Model paths
     bge_m3_model: str = "BAAI/bge-m3"
     neural_sparse_path: Path = field(
-        default_factory=lambda: Path("huggingface/v26")
+        default_factory=lambda: Path("huggingface/v29_v2")
     )
 
     # Data paths

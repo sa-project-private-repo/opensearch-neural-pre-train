@@ -1,198 +1,227 @@
 """
 DDP CLI for V28 training on multiple GPUs.
 
+Supports 8x GPU DDP for efficient large-scale training.
+
 Usage:
+    # Single node, multiple GPUs
     torchrun --nproc_per_node=8 -m src.train.cli.train_v28_ddp
+
+    # With custom config
     torchrun --nproc_per_node=8 -m src.train.cli.train_v28_ddp \
         --config configs/train_v28_b200.yaml
+
+    # Resume training
+    torchrun --nproc_per_node=8 -m src.train.cli.train_v28_ddp --resume
 """
+
 
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+import argparse
+from typing import Dict, Optional
 
 import torch
+import torch.distributed as dist
+import torch.nn as nn
+from torch.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim import AdamW
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+from transformers import get_cosine_schedule_with_warmup
 
-from src.train.cli.train_v28 import (
-    build_config,
-    create_v28_model,
-    parse_args,
-)
-from src.train.config.v28 import V28Config
+from src.model.splade_xlmr import SPLADEDocContextGated, SPLADEDocXLMR
+from src.train.config.v28 import V28Config, V28LossConfig, V28ModelConfig
+from src.train.config.base import DataConfig, TrainingConfig
 from src.train.core.checkpoint import CheckpointManager
-from src.train.core.collapse_detector import CollapseDetectionHook
-from src.train.core.ddp_trainer import DDPSPLADETrainer
-from src.train.core.hooks import (
-    CheckpointHook,
-    CurriculumHook,
-    GradientMonitorHook,
-    LoggingHook,
-)
-from src.train.data import (
-    TripletCollator,
-    create_dataloader,
-    load_training_data,
-)
+from src.train.data import load_training_data
 from src.train.data.collator import create_tokenizer
-from src.train.idf import (
-    create_stopword_mask_v26,
-    get_special_token_ids_only,
-    load_or_compute_idf,
-)
+from src.train.data.dataloader import TripletCollator
+from src.train.idf import load_or_compute_idf, create_stopword_mask_v26, get_special_token_ids_only
 from src.train.idf.korean_tokens import load_or_compute_korean_tokens
 from src.train.utils import TensorBoardLogger, setup_logging
+
 
 logger = logging.getLogger(__name__)
 
 
-def create_ddp_dataloader(
-    dataset: torch.utils.data.Dataset,
-    tokenizer: "PreTrainedTokenizer",
-    batch_size: int,
-    max_length: int,
-    num_workers: int,
-    world_size: int,
-    rank: int,
-    shuffle: bool = True,
-    use_in_batch_negatives: bool = True,
-    pin_memory: bool = True,
-    drop_last: bool = True,
-) -> tuple[DataLoader, Optional[DistributedSampler]]:
-    """
-    Create a DataLoader with DistributedSampler for DDP.
-
-    Args:
-        dataset: Dataset to load from
-        tokenizer: HuggingFace tokenizer
-        batch_size: Per-GPU batch size
-        max_length: Maximum sequence length
-        num_workers: Number of worker processes
-        world_size: Total number of GPUs
-        rank: Current GPU rank
-        shuffle: Whether to shuffle data
-        use_in_batch_negatives: Use in-batch negatives
-        pin_memory: Pin memory for GPU transfer
-        drop_last: Drop last incomplete batch
-
-    Returns:
-        Tuple of (DataLoader, DistributedSampler)
-    """
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=shuffle,
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="V28 Multi-GPU Training with DDP",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    collator = TripletCollator(
-        tokenizer=tokenizer,
-        max_length=max_length,
-        use_in_batch_negatives=use_in_batch_negatives,
+    parser.add_argument("--epochs", type=int, default=30, help="Number of epochs")
+    parser.add_argument("--batch-size", type=int, default=32, help="Per-GPU batch size")
+    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
+    parser.add_argument("--config", type=str, default=None, help="Config YAML file path")
+    parser.add_argument("--output-dir", type=str, default="outputs/train_v28_ddp", help="Output directory")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Specific checkpoint to resume from")
+
+    # V28 specific - FIXED parameters
+    parser.add_argument("--non-korean-penalty", type=float, default=5.0,
+                        help="Penalty for non-Korean tokens (reduced from 100.0 to prevent collapse)")
+    parser.add_argument("--lambda-language", type=float, default=0.3,
+                        help="Weight for language filtering loss")
+    parser.add_argument("--no-context-gate", action="store_true", help="Disable context gate")
+    parser.add_argument("--no-language-filtering", action="store_true", help="Disable language filtering")
+
+    # Gradient accumulation for effective batch size
+    parser.add_argument("--grad-accum", type=int, default=2, help="Gradient accumulation steps")
+
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--debug", action="store_true", help="Debug mode")
+
+    return parser.parse_args()
+
+
+def setup_distributed():
+    """Initialize distributed training."""
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+    return local_rank
+
+
+def cleanup_distributed():
+    """Clean up distributed training."""
+    dist.destroy_process_group()
+
+
+def is_main_process():
+    """Check if this is the main process."""
+    return dist.get_rank() == 0
+
+
+def create_v28_config(args: argparse.Namespace) -> V28Config:
+    """Create V28 config with FIXED parameters to prevent collapse."""
+
+    # Key fix: Reduced non_korean_penalty from 100.0 to 5.0
+    # and reduced lambda_language from 0.5 to 0.3
+    config = V28Config(
+        model=V28ModelConfig(
+            name="xlm-roberta-base",
+            dropout=0.1,
+            use_expansion=True,
+            expansion_mode="mlm",
+            use_context_gate=not args.no_context_gate,
+            context_gate_hidden=256,
+            context_attention_heads=4,
+        ),
+        data=DataConfig(
+            train_files=["data/v24.0/train_*.jsonl"],
+            val_files=["data/v24.0/val.jsonl"],
+            batch_size=args.batch_size,
+            max_length=192,
+            num_workers=4,
+        ),
+        loss=V28LossConfig(
+            # === CRITICAL FIX: Reduced penalties to prevent collapse ===
+            enable_language_filtering=not args.no_language_filtering,
+            non_korean_penalty=args.non_korean_penalty,  # 5.0 instead of 100.0
+            lambda_language=args.lambda_language,  # 0.3 instead of 0.5
+            korean_token_penalty=0.0,
+
+            # Context gate settings
+            use_context_gate=not args.no_context_gate,
+            context_gate_hidden=256,
+            context_attention_heads=4,
+
+            # Standard loss weights
+            lambda_infonce=2.5,
+            lambda_self=1.0,
+            lambda_positive=0.5,
+            lambda_flops=1e-5,
+            lambda_min_act=0.5,
+            temperature=0.07,
+            top_k=256,
+            min_activation=0.1,
+
+            # Stopword masking
+            use_stopword_mask=True,
+            stopword_penalty=50.0,
+        ),
+        training=TrainingConfig(
+            num_epochs=args.epochs,
+            learning_rate=args.lr,
+            weight_decay=0.01,
+            warmup_ratio=0.1,
+            gradient_clip=1.0,
+            gradient_accumulation_steps=args.grad_accum,
+            mixed_precision="bf16",
+            output_dir=args.output_dir,
+            experiment_name="splade_v28_ddp_fixed",
+            log_every_n_steps=50,
+            save_every_n_epochs=5,
+        ),
+        seed=args.seed,
+        enable_curriculum=True,
     )
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=sampler,
-        shuffle=False,  # Sampler handles shuffling
-        num_workers=num_workers,
-        collate_fn=collator,
-        pin_memory=pin_memory and torch.cuda.is_available(),
-        drop_last=drop_last,
-    )
-
-    return dataloader, sampler
+    return config
 
 
-def setup_ddp_training(
-    config: V28Config,
-    local_rank: int,
-    world_size: int,
-    resume_from: Optional[str] = None,
-    korean_tokens_path: Optional[str] = None,
-    recompute_korean_tokens: bool = False,
-) -> DDPSPLADETrainer:
-    """
-    Setup DDP training components for V28.
+def create_model(config: V28Config, device: torch.device) -> nn.Module:
+    """Create V28 model."""
+    if config.model.use_context_gate:
+        model = SPLADEDocContextGated(
+            model_name=config.model.name,
+            dropout=config.model.dropout,
+            use_mlm_head=config.model.use_expansion,
+            gate_hidden=config.model.context_gate_hidden,
+            gate_heads=config.model.context_attention_heads,
+        )
+        logger.info("Created SPLADEDocContextGated model")
+    else:
+        model = SPLADEDocXLMR(
+            model_name=config.model.name,
+            dropout=config.model.dropout,
+            use_mlm_head=config.model.use_expansion,
+        )
+        logger.info("Created SPLADEDocXLMR model (no context gate)")
 
-    Args:
-        config: V28 configuration
-        local_rank: Local GPU rank
-        world_size: Total number of GPUs
-        resume_from: Optional checkpoint path
-        korean_tokens_path: Path to cached Korean token IDs
-        recompute_korean_tokens: Force recomputation
+    return model.to(device)
 
-    Returns:
-        Configured DDPSPLADETrainer
-    """
+
+def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Module:
+    """Create V28 loss function with fixed parameters."""
     from src.model.losses import SPLADELossV28
 
-    is_main = local_rank == 0
+    # Get special token IDs
+    special_token_ids = get_special_token_ids_only(tokenizer)
 
-    # Set random seed (offset by rank for diversity)
-    torch.manual_seed(config.seed + local_rank)
-    torch.cuda.manual_seed_all(config.seed + local_rank)
-
-    # Create tokenizer
-    if is_main:
-        logger.info(f"Loading tokenizer: {config.model.name}")
-    tokenizer = create_tokenizer(config.model.name)
-
-    # Create model
-    if is_main:
-        logger.info(f"Creating V28 model: {config.model.name}")
-    model = create_v28_model(config)
-
-    if is_main:
-        num_params = sum(p.numel() for p in model.parameters())
-        trainable = sum(
-            p.numel()
-            for p in model.parameters()
-            if p.requires_grad
-        )
-        logger.info(f"Model parameters: {num_params:,}")
-        logger.info(f"Trainable parameters: {trainable:,}")
-
-    # === Korean token IDs for language filtering ===
+    # Load Korean token IDs if language filtering enabled
     korean_token_ids = None
     if config.loss.enable_language_filtering:
-        if korean_tokens_path is None:
-            korean_tokens_path = (
-                f"{config.training.output_dir}/korean_token_ids.json"
-            )
+        korean_tokens_path = f"{config.training.output_dir}/korean_token_ids.json"
         korean_token_ids = load_or_compute_korean_tokens(
             cache_path=korean_tokens_path,
             tokenizer=tokenizer,
-            recompute=recompute_korean_tokens,
+            recompute=False,
         )
-        if is_main:
-            logger.info(
-                f"Korean token IDs: {len(korean_token_ids):,}"
-            )
+        if is_main_process():
+            logger.info(f"Loaded Korean token IDs: {len(korean_token_ids):,}")
 
-    # Special token IDs
-    special_token_ids = get_special_token_ids_only(tokenizer)
+    # Load IDF weights
 
-    # IDF weights
     idf_cache_path = config.get_idf_cache_path()
     idf_weights = load_or_compute_idf(
         cache_path=idf_cache_path,
         corpus_files=config.data.train_files,
         tokenizer=tokenizer,
-        recompute=config.loss.recompute_idf,
-        smoothing=config.loss.idf_smoothing,
+        recompute=False,
     )
 
-    # Stopword mask
+    # Create stopword mask
     stopword_mask = None
     if config.loss.use_stopword_mask:
         stopword_mask = create_stopword_mask_v26(tokenizer)
 
-    # Create loss function (with warmup + collapse detection)
     loss_fn = SPLADELossV28(
         idf_weights=idf_weights,
         special_token_ids=special_token_ids,
@@ -200,321 +229,407 @@ def setup_ddp_training(
         lambda_language=config.loss.lambda_language,
         non_korean_penalty=config.loss.non_korean_penalty,
         korean_penalty=config.loss.korean_token_penalty,
-        enable_language_filtering=(
-            config.loss.enable_language_filtering
-        ),
-        language_warmup_steps=(
-            config.loss.language_warmup_steps
-        ),
-        language_penalty_max=(
-            config.loss.language_penalty_max
-        ),
-        collapse_flops_threshold=(
-            config.loss.collapse_flops_threshold
-        ),
-        collapse_check_window=(
-            config.loss.collapse_check_window
-        ),
+        enable_language_filtering=config.loss.enable_language_filtering,
         lambda_infonce=config.loss.lambda_infonce,
         lambda_self=config.loss.lambda_self,
         lambda_positive=config.loss.lambda_positive,
         lambda_flops=config.loss.lambda_flops,
         lambda_min_act=config.loss.lambda_min_act,
-        lambda_kd=config.loss.lambda_kd,
         temperature=config.loss.temperature,
-        kd_temperature=config.loss.kd_temperature,
         top_k=config.loss.top_k,
         min_activation=config.loss.min_activation,
-        idf_alpha=config.loss.idf_alpha,
-        special_penalty=config.loss.special_token_penalty,
         stopword_mask=stopword_mask,
         stopword_penalty=config.loss.stopword_penalty,
     )
 
-    # Load training data
-    if is_main:
-        logger.info(
-            f"Loading training data: {config.data.train_files}"
-        )
-    train_dataset = load_training_data(config.data.train_files)
-    if is_main:
-        logger.info(f"Training samples: {len(train_dataset):,}")
-        pair_counts = train_dataset.get_pair_type_counts()
-        for pair_type, count in sorted(pair_counts.items()):
-            pct = 100 * count / len(train_dataset)
-            logger.info(f"  {pair_type}: {count:,} ({pct:.1f}%)")
+    return loss_fn.to(device)
 
-    # Load validation data
-    val_dataset = None
-    if config.data.val_files:
-        val_dataset = load_training_data(config.data.val_files)
-        if is_main:
-            logger.info(
-                f"Validation samples: {len(val_dataset):,}"
-            )
 
-    # Create DDP dataloaders
-    train_dataloader, _ = create_ddp_dataloader(
-        dataset=train_dataset,
+def create_dataloader_ddp(
+    dataset,
+    tokenizer,
+    batch_size: int,
+    max_length: int,
+    num_workers: int,
+    is_train: bool = True,
+) -> DataLoader:
+    """Create distributed dataloader."""
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=dist.get_world_size(),
+        rank=dist.get_rank(),
+        shuffle=is_train,
+    )
+
+    collator = TripletCollator(
         tokenizer=tokenizer,
-        batch_size=config.data.batch_size,
-        max_length=config.data.max_length,
-        num_workers=config.data.num_workers,
-        world_size=world_size,
-        rank=local_rank,
-        shuffle=True,
+        max_length=max_length,
         use_in_batch_negatives=True,
     )
 
-    val_dataloader = None
-    if val_dataset:
-        val_dataloader, _ = create_ddp_dataloader(
-            dataset=val_dataset,
-            tokenizer=tokenizer,
-            batch_size=config.data.batch_size,
-            max_length=config.data.max_length,
-            num_workers=config.data.num_workers,
-            world_size=world_size,
-            rank=local_rank,
-            shuffle=False,
-            use_in_batch_negatives=True,
-        )
-
-    # Checkpoint manager
-    checkpoint_manager = CheckpointManager(
-        output_dir=config.training.output_dir,
-        keep_last_n=config.training.keep_last_n_checkpoints,
-        save_best=True,
-        metric_for_best=(
-            "val_loss" if val_dataloader else "train_loss"
-        ),
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=num_workers,
+        collate_fn=collator,
+        pin_memory=True,
+        drop_last=is_train,
     )
 
-    # Hooks (only rank 0 gets TensorBoard)
-    hooks = []
+    return dataloader
+
+
+def train_epoch(
+    model: DDP,
+    dataloader: DataLoader,
+    loss_fn: nn.Module,
+    optimizer: AdamW,
+    scheduler,
+    scaler: Optional[GradScaler],
+    config: V28Config,
+    epoch: int,
+    global_step: int,
+    device: torch.device,
+    tb_logger: Optional[TensorBoardLogger] = None,
+) -> tuple[float, int]:
+    """Train one epoch with DDP."""
+    model.train()
+    dataloader.sampler.set_epoch(epoch)  # Important for shuffling
+
+    total_loss = 0.0
+    num_batches = 0
+
+    # Only show progress bar on main process
+    if is_main_process():
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch}")
+    else:
+        progress_bar = dataloader
+
+    optimizer.zero_grad()
+
+    for batch_idx, batch in enumerate(progress_bar):
+        # Move to device
+        query_input_ids = batch["query_input_ids"].to(device)
+        query_attention_mask = batch["query_attention_mask"].to(device)
+        positive_input_ids = batch["positive_input_ids"].to(device)
+        positive_attention_mask = batch["positive_attention_mask"].to(device)
+
+        # Forward with mixed precision
+        with autocast(device_type="cuda", dtype=torch.bfloat16):
+            # Encode anchor - pass explicit token_type_ids to avoid HuggingFace internal buffer issue
+            # (XLM-RoBERTa's internal token_type_ids buffer causes inplace op errors)
+            query_token_type_ids = torch.zeros_like(query_input_ids)
+            anchor_repr, _ = model(query_input_ids, query_attention_mask, query_token_type_ids)
+
+            # Encode positive
+            positive_token_type_ids = torch.zeros_like(positive_input_ids)
+            positive_repr, _ = model(positive_input_ids, positive_attention_mask, positive_token_type_ids)
+
+            # In-batch negatives
+            negative_repr = torch.roll(positive_repr, shifts=1, dims=0)
+
+            # Compute loss - use contiguous copies of input_ids to avoid inplace op issues
+            loss, loss_dict = loss_fn(
+                anchor_repr=anchor_repr,
+                positive_repr=positive_repr,
+                negative_repr=negative_repr,
+                anchor_input_ids=query_input_ids.detach().clone(),
+                anchor_attention_mask=query_attention_mask.detach(),
+                positive_input_ids=positive_input_ids.detach().clone(),
+                positive_attention_mask=positive_attention_mask.detach(),
+            )
+
+        # Backward
+        loss = loss / config.training.gradient_accumulation_steps
+
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        # Optimizer step
+        if (batch_idx + 1) % config.training.gradient_accumulation_steps == 0:
+            if scaler is not None:
+                scaler.unscale_(optimizer)
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.gradient_clip)
+
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+
+            scheduler.step()
+            optimizer.zero_grad()
+            global_step += 1
+
+            # Logging
+            if is_main_process() and global_step % config.training.log_every_n_steps == 0:
+                lr = scheduler.get_last_lr()[0]
+
+                # Get metrics from loss_fn
+                semantic_ratio = loss_fn.get_average_semantic_ratio() if hasattr(loss_fn, 'get_average_semantic_ratio') else 0
+                korean_ratio = loss_fn.get_average_korean_ratio() if hasattr(loss_fn, 'get_average_korean_ratio') else 0
+
+                logger.info(
+                    f"Step {global_step} - loss: {loss.item() * config.training.gradient_accumulation_steps:.4f}, "
+                    f"lr: {lr:.2e}, semantic_ratio: {semantic_ratio:.4f}, korean_ratio: {korean_ratio:.4f}"
+                )
+
+                if tb_logger:
+                    tb_logger.log_scalar("train/loss", loss.item() * config.training.gradient_accumulation_steps, global_step)
+                    tb_logger.log_scalar("train/lr", lr, global_step)
+                    tb_logger.log_scalar("train/semantic_ratio", semantic_ratio, global_step)
+                    tb_logger.log_scalar("train/korean_ratio", korean_ratio, global_step)
+
+        total_loss += loss.item() * config.training.gradient_accumulation_steps
+        num_batches += 1
+
+        if is_main_process() and isinstance(progress_bar, tqdm):
+            progress_bar.set_postfix({
+                "loss": f"{total_loss / num_batches:.4f}",
+                "step": global_step,
+            })
+
+    avg_loss = total_loss / max(num_batches, 1)
+    return avg_loss, global_step
+
+
+def save_checkpoint(
+    model: DDP,
+    optimizer: AdamW,
+    scheduler,
+    epoch: int,
+    step: int,
+    output_dir: str,
+    is_best: bool = False,
+):
+    """Save checkpoint (only on main process)."""
+    if not is_main_process():
+        return
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save model weights (unwrap DDP)
+    model_state = model.module.state_dict()
+
+    checkpoint_dir = output_dir / f"checkpoint_epoch{epoch}_step{step}"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.save(model_state, checkpoint_dir / "model.pt")
+    torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
+    torch.save(scheduler.state_dict(), checkpoint_dir / "scheduler.pt")
+
+    # Save checkpoint info
+    info = {"epoch": epoch, "step": step}
+    torch.save(info, checkpoint_dir / "checkpoint_info.pt")
+
+    logger.info(f"Saved checkpoint to {checkpoint_dir}")
+
+
+def main():
+    """Main training function."""
+    args = parse_args()
+
+    # Setup distributed
+    local_rank = setup_distributed()
+    device = torch.device(f"cuda:{local_rank}")
+
+    # Enable anomaly detection for debugging (only on rank 0)
+    if local_rank == 0 and args.debug:
+        torch.autograd.set_detect_anomaly(True)
+
+    # Setup logging (only on main process)
+    if is_main_process():
+        log_level = logging.DEBUG if args.debug else logging.INFO
+        setup_logging(output_dir=args.output_dir, level=log_level)
+
+        logger.info("=" * 70)
+        logger.info("V28 Multi-GPU Training with DDP (FIXED)")
+        logger.info("=" * 70)
+        logger.info(f"World size: {dist.get_world_size()}")
+        logger.info(f"Local rank: {local_rank}")
+        logger.info("")
+        logger.info("=== FIXES APPLIED ===")
+        logger.info(f"  non_korean_penalty: {args.non_korean_penalty} (was 100.0)")
+        logger.info(f"  lambda_language: {args.lambda_language} (was 0.5)")
+        logger.info("=" * 70)
+
+    # Set seed
+    torch.manual_seed(args.seed + dist.get_rank())
+    torch.cuda.manual_seed_all(args.seed + dist.get_rank())
+
+    # Create config
+    config = create_v28_config(args)
+
+    if is_main_process():
+        config.validate()
+        logger.info(f"Batch size per GPU: {config.data.batch_size}")
+        logger.info(f"Effective batch size: {config.data.batch_size * dist.get_world_size() * config.training.gradient_accumulation_steps}")
+        logger.info(f"Epochs: {config.training.num_epochs}")
+
+    # Create tokenizer
+    tokenizer = create_tokenizer(config.model.name)
+
+    # Create model
+    model = create_model(config, device)
+
+    # Log model info
+    if is_main_process():
+        num_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"Model parameters: {num_params:,}")
+
+    # Wrap with DDP
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+    # Create loss function
+    loss_fn = create_loss_fn(config, tokenizer, device)
+
+    # Load data
+    if is_main_process():
+        logger.info(f"Loading training data from: {config.data.train_files}")
+
+    train_dataset = load_training_data(config.data.train_files)
+
+    if is_main_process():
+        logger.info(f"Training samples: {len(train_dataset):,}")
+
+    # Create dataloader
+    train_dataloader = create_dataloader_ddp(
+        train_dataset,
+        tokenizer,
+        batch_size=config.data.batch_size,
+        max_length=config.data.max_length,
+        num_workers=config.data.num_workers,
+        is_train=True,
+    )
+
+    # Create optimizer
+    no_decay = ["bias", "LayerNorm.weight", "layer_norm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": config.training.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = AdamW(optimizer_grouped_parameters, lr=config.training.learning_rate)
+
+    # Create scheduler
+    total_steps = len(train_dataloader) * config.training.num_epochs // config.training.gradient_accumulation_steps
+    warmup_steps = int(total_steps * config.training.warmup_ratio)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+
+    if is_main_process():
+        logger.info(f"Total steps: {total_steps}, Warmup steps: {warmup_steps}")
+
+    # GradScaler for mixed precision (not needed for bf16)
+    scaler = None
+
+    # TensorBoard logger
     tb_logger = None
-    if is_main:
+    if is_main_process():
         tb_logger = TensorBoardLogger(
-            log_dir=str(
-                Path(config.training.output_dir) / "tensorboard"
-            ),
+            log_dir=str(Path(args.output_dir) / "tensorboard"),
             experiment_name=config.training.experiment_name,
         )
 
-    hooks.append(
-        LoggingHook(
-            log_every_n_steps=config.training.log_every_n_steps,
-            tensorboard_writer=(
-                tb_logger.writer if tb_logger else None
-            ),
-        )
-    )
-    hooks.append(
-        CheckpointHook(
-            checkpoint_manager=checkpoint_manager,
-            save_every_n_epochs=config.training.save_every_n_epochs,
-            save_every_n_steps=config.training.save_every_n_steps,
-        )
-    )
-    hooks.append(
-        GradientMonitorHook(
-            log_every_n_steps=(
-                config.training.log_every_n_steps * 2
-            ),
-            tensorboard_writer=(
-                tb_logger.writer if tb_logger else None
-            ),
-        )
-    )
+    # Resume from checkpoint
+    start_epoch = 1
+    global_step = 0
 
-    # Add collapse detection hook
-    if config.loss.enable_language_filtering:
-        hooks.append(CollapseDetectionHook(
-            flops_threshold=(
-                config.loss.collapse_flops_threshold
-            ),
-            check_window=config.loss.collapse_check_window,
-            check_every_n_steps=(
-                config.training.log_every_n_steps
-            ),
-        ))
-        if is_main:
-            logger.info("Collapse detection enabled")
+    if args.resume or args.checkpoint:
+        checkpoint_path = args.checkpoint
+        if checkpoint_path is None:
+            # Find latest checkpoint
+            output_dir = Path(args.output_dir)
+            checkpoints = sorted(output_dir.glob("checkpoint_epoch*"))
+            if checkpoints:
+                checkpoint_path = str(checkpoints[-1])
 
-    if config.enable_curriculum:
-        hooks.append(CurriculumHook(config))
-        if is_main:
-            logger.info("Curriculum learning enabled")
+        if checkpoint_path:
+            if is_main_process():
+                logger.info(f"Resuming from {checkpoint_path}")
 
-    # Create DDP trainer
-    trainer = DDPSPLADETrainer(
-        model=model,
-        train_dataloader=train_dataloader,
-        val_dataloader=val_dataloader,
-        loss_fn=loss_fn,
-        config=config,
-        checkpoint_manager=checkpoint_manager,
-        hooks=hooks,
-        local_rank=local_rank,
-        world_size=world_size,
-    )
+            model_state = torch.load(Path(checkpoint_path) / "model.pt", map_location=device)
+            model.module.load_state_dict(model_state)
 
-    # Resume from checkpoint if requested
-    if resume_from:
-        trainer.resume_from_checkpoint(resume_from)
+            optimizer.load_state_dict(torch.load(Path(checkpoint_path) / "optimizer.pt", map_location=device))
+            scheduler.load_state_dict(torch.load(Path(checkpoint_path) / "scheduler.pt", map_location=device))
 
-    return trainer
+            info = torch.load(Path(checkpoint_path) / "checkpoint_info.pt")
+            start_epoch = info["epoch"] + 1
+            global_step = info["step"]
 
+            if is_main_process():
+                logger.info(f"Resumed from epoch {start_epoch - 1}, step {global_step}")
 
-def main() -> int:
-    """Main entry point for DDP V28 training."""
-    # Get DDP environment variables (set by torchrun)
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    is_main = local_rank == 0
-
-    # Parse args
-    args = parse_args()
-
-    # Setup logging (WARNING for non-main ranks)
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    if not is_main:
-        log_level = logging.WARNING
-
-    output_dir = args.output_dir or "outputs/train_v28_ddp"
-    setup_logging(output_dir=output_dir, level=log_level)
-
-    if is_main:
-        logger.info("=" * 70)
-        logger.info("SPLADE V28 DDP Training (Multi-GPU)")
-        logger.info(
-            "Language Filtering + Context-Gated Sparse Expansion"
-        )
-        logger.info("=" * 70)
-        logger.info(f"World size: {world_size}")
-        logger.info(f"Local rank: {local_rank}")
-        logger.info("=" * 70)
+    # Training loop
+    if is_main_process():
+        logger.info("Starting training...")
 
     try:
-        # Initialize distributed
-        DDPSPLADETrainer.setup_distributed(
-            local_rank, world_size
-        )
+        for epoch in range(start_epoch, config.training.num_epochs + 1):
+            if is_main_process():
+                logger.info(f"\n{'=' * 50}")
+                logger.info(f"Epoch {epoch}/{config.training.num_epochs}")
+                logger.info(f"{'=' * 50}")
 
-        # Build config
-        config = build_config(args)
-
-        # Override output dir for DDP
-        if args.output_dir:
-            config.training.output_dir = args.output_dir
-
-        config.validate()
-
-        if is_main:
-            logger.info("Configuration:")
-            logger.info(f"  Model: {config.model.name}")
-            logger.info(
-                f"  Use context gate: "
-                f"{config.model.use_context_gate}"
-            )
-            logger.info(
-                f"  Per-GPU batch size: "
-                f"{config.data.batch_size}"
-            )
-            logger.info(
-                f"  Effective batch size: "
-                f"{config.data.batch_size * world_size}"
-            )
-            logger.info(
-                f"  Learning rate: "
-                f"{config.training.learning_rate}"
-            )
-            logger.info(
-                f"  Epochs: {config.training.num_epochs}"
-            )
-            logger.info(
-                f"  Mixed precision: "
-                f"{config.training.mixed_precision}"
-            )
-            logger.info(
-                f"  Output dir: {config.training.output_dir}"
+            avg_loss, global_step = train_epoch(
+                model=model,
+                dataloader=train_dataloader,
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                config=config,
+                epoch=epoch,
+                global_step=global_step,
+                device=device,
+                tb_logger=tb_logger,
             )
 
-        # Determine resume checkpoint
-        resume_from = None
-        if args.checkpoint:
-            resume_from = args.checkpoint
-        elif args.resume:
-            ckpt_mgr = CheckpointManager(
-                output_dir=config.training.output_dir
-            )
-            if ckpt_mgr.has_checkpoint():
-                resume_from = str(
-                    ckpt_mgr.get_latest_checkpoint_path()
-                )
-                if is_main:
-                    logger.info(f"Resuming from: {resume_from}")
+            if is_main_process():
+                logger.info(f"Epoch {epoch} completed. Avg loss: {avg_loss:.4f}")
 
-        # Setup and run training
-        trainer = setup_ddp_training(
-            config=config,
-            local_rank=local_rank,
-            world_size=world_size,
-            resume_from=resume_from,
-            korean_tokens_path=args.korean_tokens_path,
-            recompute_korean_tokens=args.recompute_korean_tokens,
-        )
+                # Check semantic ratio
+                semantic_ratio = loss_fn.get_average_semantic_ratio() if hasattr(loss_fn, 'get_average_semantic_ratio') else 0
+                korean_ratio = loss_fn.get_average_korean_ratio() if hasattr(loss_fn, 'get_average_korean_ratio') else 0
 
-        results = trainer.train()
+                logger.info(f"  Semantic ratio: {semantic_ratio:.4f}")
+                logger.info(f"  Korean ratio: {korean_ratio:.4f}")
 
-        if is_main:
-            logger.info("=" * 70)
-            logger.info("Training Complete!")
-            logger.info(
-                f"  Epochs: {results['epochs_completed']}"
-            )
-            logger.info(
-                f"  Final train loss: "
-                f"{results['final_train_loss']:.4f}"
-            )
-            if results["best_val_loss"] < float("inf"):
-                logger.info(
-                    f"  Best val loss: "
-                    f"{results['best_val_loss']:.4f}"
-                )
+                # Warning if collapsing
+                if semantic_ratio < 1.0:
+                    logger.warning("WARNING: semantic_ratio < 1.0 - model may be collapsing!")
 
-            # Completion flag
-            flag = (
-                Path(config.training.output_dir)
-                / "training_complete.flag"
-            )
-            flag.write_text(
-                f"completed_epochs="
-                f"{results['epochs_completed']}\n"
-                f"world_size={world_size}\n"
-            )
+            # Save checkpoint
+            if epoch % config.training.save_every_n_epochs == 0:
+                save_checkpoint(model, optimizer, scheduler, epoch, global_step, args.output_dir)
 
-        # Cleanup
-        trainer.cleanup()
-        return 0
+            # Sync across processes
+            dist.barrier()
 
-    except FileNotFoundError as e:
-        if is_main:
-            logger.error(f"File not found: {e}")
-        return 1
-    except ValueError as e:
-        if is_main:
-            logger.error(f"Configuration error: {e}")
-        return 1
+        # Final checkpoint
+        save_checkpoint(model, optimizer, scheduler, config.training.num_epochs, global_step, args.output_dir)
+
+        if is_main_process():
+            logger.info("\nTraining completed!")
+
     except KeyboardInterrupt:
-        if is_main:
-            logger.info("Training interrupted by user")
-        return 130
-    except Exception as e:
-        if is_main:
-            logger.exception(f"Training failed: {e}")
-        return 1
+        if is_main_process():
+            logger.info("Training interrupted. Saving checkpoint...")
+            save_checkpoint(model, optimizer, scheduler, epoch, global_step, args.output_dir)
+
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
