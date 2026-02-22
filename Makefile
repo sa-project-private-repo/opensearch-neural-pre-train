@@ -18,7 +18,9 @@
 	info compute-idf-rust collect-v29-data build-v29-data v29-data-stats mine-hard-negatives \
 	train-v28-ddp train-v28-ddp-bg train-v28-ddp-resume logs-v28-ddp tensorboard-v28-ddp \
 	v29-pipeline-bg benchmark-ko-strategyqa lint format clean-cache \
-	prepare-mlm-data pretrain-mlm pretrain-mlm-bg logs-mlm mlm-pipeline
+	prepare-mlm-data pretrain-mlm pretrain-mlm-bg logs-mlm mlm-pipeline \
+	finetune-doc2query finetune-doc2query-bg expand-documents expand-documents-bg \
+	logs-doc2query doc2query-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -1060,6 +1062,98 @@ logs-mlm: ## Show MLM pre-training logs
 mlm-pipeline: ## Full MLM pipeline (data -> pretrain)
 	@$(MAKE) prepare-mlm-data
 	@$(MAKE) pretrain-mlm
+
+##@ Doc2Query Document Expansion
+
+# Doc2Query directories
+DOC2QUERY_OUTPUT := outputs/doc2query_ko
+DOC2QUERY_DATA_DIR := data/v29.0
+DOC2QUERY_EXPANDED_DIR := data/v29.0_expanded
+
+finetune-doc2query: ## Fine-tune pko-t5-base on KorQuAD for Korean question generation
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Fine-tuning pko-t5-base on KorQuAD$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Model: paust/pko-t5-base (250M params)"
+	@echo "Data:  KorQuAD 1.0 (squad_kor_v1)"
+	@echo "Task:  Answer-free question generation"
+	@echo "Output: $(DOC2QUERY_OUTPUT)"
+	@echo ""
+	@mkdir -p $(DOC2QUERY_OUTPUT)
+	@$(PYTHON) scripts/finetune_doc2query.py \
+		--output-dir $(DOC2QUERY_OUTPUT)
+	@echo "$(GREEN)OK doc2query model saved to $(DOC2QUERY_OUTPUT)$(NC)"
+
+finetune-doc2query-bg: ## Fine-tune pko-t5-base on KorQuAD in background (nohup)
+	@echo "$(BLUE)Starting doc2query fine-tuning in background...$(NC)"
+	@mkdir -p $(DOC2QUERY_OUTPUT)
+	@nohup $(PYTHON) scripts/finetune_doc2query.py \
+		--output-dir $(DOC2QUERY_OUTPUT) \
+		> $(DOC2QUERY_OUTPUT)/nohup.out 2>&1 &
+	@echo "$(GREEN)Fine-tuning started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'finetune_doc2query' | tail -1)"
+	@echo "Log: $(DOC2QUERY_OUTPUT)/nohup.out"
+	@echo ""
+	@echo "$(YELLOW)Monitor with:$(NC)"
+	@echo "  make logs-doc2query"
+
+expand-documents: ## Expand training documents with doc2query synthetic queries
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Document Expansion via doc2query$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Model:  $(DOC2QUERY_OUTPUT)"
+	@echo "Input:  $(DOC2QUERY_DATA_DIR)"
+	@echo "Output: $(DOC2QUERY_EXPANDED_DIR)"
+	@echo "Queries per doc: 5"
+	@echo ""
+	@test -d $(DOC2QUERY_OUTPUT) || (echo "$(RED)Error: Model not found. Run: make finetune-doc2query$(NC)" && exit 1)
+	@mkdir -p $(DOC2QUERY_EXPANDED_DIR)
+	@$(PYTHON) scripts/expand_documents.py \
+		--model-dir $(DOC2QUERY_OUTPUT) \
+		--data-dir $(DOC2QUERY_DATA_DIR) \
+		--output-dir $(DOC2QUERY_EXPANDED_DIR)
+	@echo "$(GREEN)OK Expanded data written to $(DOC2QUERY_EXPANDED_DIR)$(NC)"
+
+expand-documents-bg: ## Expand training documents in background (nohup)
+	@echo "$(BLUE)Starting document expansion in background...$(NC)"
+	@test -d $(DOC2QUERY_OUTPUT) || (echo "$(RED)Error: Model not found. Run: make finetune-doc2query$(NC)" && exit 1)
+	@mkdir -p $(DOC2QUERY_EXPANDED_DIR)
+	@nohup $(PYTHON) scripts/expand_documents.py \
+		--model-dir $(DOC2QUERY_OUTPUT) \
+		--data-dir $(DOC2QUERY_DATA_DIR) \
+		--output-dir $(DOC2QUERY_EXPANDED_DIR) \
+		> $(DOC2QUERY_EXPANDED_DIR)/nohup.out 2>&1 &
+	@echo "$(GREEN)Document expansion started in background$(NC)"
+	@sleep 1
+	@echo "PID: $$(pgrep -f 'expand_documents' | tail -1)"
+	@echo "Log: $(DOC2QUERY_EXPANDED_DIR)/nohup.out"
+
+logs-doc2query: ## Show doc2query fine-tuning logs (real-time)
+	@echo "$(BLUE)Doc2Query Fine-tuning Logs:$(NC)"
+	@if [ -f $(DOC2QUERY_OUTPUT)/nohup.out ]; then \
+		tail -f $(DOC2QUERY_OUTPUT)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Run: make finetune-doc2query-bg$(NC)"; \
+	fi
+
+doc2query-pipeline: ## Full doc2query pipeline: fine-tune pko-t5 then expand documents
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Doc2Query Full Pipeline$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Steps:$(NC)"
+	@echo "  1. Fine-tune pko-t5-base on KorQuAD"
+	@echo "  2. Expand documents with synthetic queries"
+	@echo ""
+	@echo "$(BLUE)[1/2]$(NC) Fine-tuning doc2query model..."
+	@$(MAKE) finetune-doc2query
+	@echo ""
+	@echo "$(BLUE)[2/2]$(NC) Expanding training documents..."
+	@$(MAKE) expand-documents
+	@echo ""
+	@echo "$(GREEN)OK Doc2Query pipeline complete$(NC)"
+	@echo "Expanded data: $(DOC2QUERY_EXPANDED_DIR)"
 
 ##@ Monitoring
 
