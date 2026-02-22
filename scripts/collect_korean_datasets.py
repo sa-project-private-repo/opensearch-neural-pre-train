@@ -30,6 +30,9 @@ DATASET_NAMES = [
     "mc4_ko",
     "wikipedia_ko",
     "opus_en_ko",
+    "ko_triplet",
+    "ko_wikidata_qa",
+    "ko_alpaca_bingsu",
 ]
 
 
@@ -180,82 +183,12 @@ def collect_klue_nli() -> Generator[dict[str, Any], None, None]:
 def collect_ko_strategyqa() -> (
     Generator[dict[str, Any], None, None]
 ):
-    """Collect Ko-StrategyQA complex QA pairs."""
-    logger.info("Loading Ko-StrategyQA...")
-    try:
-        ds = load_dataset(
-            "KAIST-AI/Ko-StrategyQA", trust_remote_code=True
-        )
-    except Exception as e:
-        logger.error("Failed to load Ko-StrategyQA: %s", e)
-        return
-
-    for split in ds:
-        for row in ds[split]:
-            question = row.get("question", "")
-            if not question:
-                continue
-
-            evidence_text = ""
-            try:
-                paragraphs = row.get("paragraphs", [])
-                if paragraphs:
-                    if isinstance(paragraphs[0], str):
-                        evidence_text = " ".join(paragraphs)
-                    elif isinstance(paragraphs[0], dict):
-                        evidence_text = " ".join(
-                            p.get("content", p.get("text", ""))
-                            for p in paragraphs
-                        )
-            except (TypeError, KeyError, IndexError):
-                pass
-
-            if not evidence_text:
-                try:
-                    evidence = row.get("evidence", [])
-                    if isinstance(evidence, list):
-                        parts = []
-                        for item in evidence:
-                            if isinstance(item, str):
-                                parts.append(item)
-                            elif isinstance(item, list):
-                                parts.extend(
-                                    s
-                                    for s in item
-                                    if isinstance(s, str)
-                                )
-                            elif isinstance(item, dict):
-                                parts.append(
-                                    item.get(
-                                        "content",
-                                        item.get("text", ""),
-                                    )
-                                )
-                        evidence_text = " ".join(parts)
-                    elif isinstance(evidence, str):
-                        evidence_text = evidence
-                except (TypeError, KeyError):
-                    pass
-
-            if not evidence_text:
-                try:
-                    facts = row.get("facts", [])
-                    if facts:
-                        evidence_text = " ".join(
-                            f if isinstance(f, str) else str(f)
-                            for f in facts
-                        )
-                except (TypeError, KeyError):
-                    pass
-
-            rec = _make_record(
-                question,
-                evidence_text,
-                "complex_qa",
-                "Ko-StrategyQA",
-            )
-            if rec:
-                yield rec
+    """Skip Ko-StrategyQA (too small for training)."""
+    logger.info(
+        "Ko-StrategyQA too small for training (592 queries), skipping"
+    )
+    return
+    yield  # make this a generator
 
 
 # ------------------------------------------------------------------
@@ -293,7 +226,7 @@ def collect_open_orca_ko() -> (
     logger.info("Loading Open-Orca-ko...")
     try:
         ds = load_dataset(
-            "kyujinpy/Open-Orca-ko", trust_remote_code=True
+            "kyujinpy/OpenOrca-KO", trust_remote_code=True
         )
     except Exception as e:
         logger.error("Failed to load Open-Orca-ko: %s", e)
@@ -405,7 +338,7 @@ def collect_wikipedia_ko(
     try:
         ds = load_dataset(
             "wikimedia/wikipedia",
-            "20240201.ko",
+            "20231101.ko",
             split="train",
             trust_remote_code=True,
         )
@@ -486,6 +419,100 @@ def collect_opus_en_ko() -> (
 
 
 # ------------------------------------------------------------------
+# 11. Ko-Triplet v1.0
+# ------------------------------------------------------------------
+def collect_ko_triplet() -> Generator[dict[str, Any], None, None]:
+    """Collect Ko-Triplet v1.0 retrieval triplets (744K)."""
+    logger.info("Loading ko-triplet-v1.0...")
+    try:
+        ds = load_dataset(
+            "nlpai-lab/ko-triplet-v1.0",
+            split="train",
+            trust_remote_code=True,
+        )
+    except Exception as e:
+        logger.error("Failed to load ko-triplet-v1.0: %s", e)
+        return
+
+    for row in ds:
+        query = row.get("query", "")
+        positive = row.get("document", "")
+        negative = row.get("hard_negative", "")
+        q = query.strip() if query else ""
+        p = positive.strip() if positive else ""
+        if not q or not p:
+            continue
+        yield {
+            "query": q,
+            "positive": p,
+            "negative": negative.strip() if negative else None,
+            "pair_type": "retrieval_triplet",
+            "difficulty": "hard",
+            "source": "ko-triplet",
+        }
+
+
+# ------------------------------------------------------------------
+# 12. Ko Wikidata QA
+# ------------------------------------------------------------------
+def collect_ko_wikidata_qa() -> (
+    Generator[dict[str, Any], None, None]
+):
+    """Collect Ko Wikidata QA pairs (137K)."""
+    logger.info("Loading ko_wikidata_QA...")
+    try:
+        ds = load_dataset(
+            "maywell/ko_wikidata_QA",
+            split="train",
+            trust_remote_code=True,
+        )
+    except Exception as e:
+        logger.error("Failed to load ko_wikidata_QA: %s", e)
+        return
+
+    for row in ds:
+        instruction = row.get("instruction", "")
+        output = row.get("output", "")
+        rec = _make_record(
+            instruction, output, "wikidata_qa", "ko-wikidata-QA"
+        )
+        if rec:
+            yield rec
+
+
+# ------------------------------------------------------------------
+# 13. Ko Alpaca (Bingsu)
+# ------------------------------------------------------------------
+def collect_ko_alpaca_bingsu() -> (
+    Generator[dict[str, Any], None, None]
+):
+    """Collect Ko Alpaca instruction pairs from Bingsu (49K)."""
+    logger.info("Loading Bingsu/ko_alpaca_data...")
+    try:
+        ds = load_dataset(
+            "Bingsu/ko_alpaca_data",
+            split="train",
+            trust_remote_code=True,
+        )
+    except Exception as e:
+        logger.error("Failed to load ko_alpaca_data: %s", e)
+        return
+
+    for row in ds:
+        instruction = row.get("instruction", "")
+        inp = row.get("input", "")
+        output = row.get("output", "")
+        query = (
+            f"{instruction}\n{inp}" if inp and inp.strip() else instruction
+        )
+        rec = _make_record(
+            query, output, "instruction", "ko-alpaca-bingsu"
+        )
+        if rec:
+            yield rec
+
+
+# ------------------------------------------------------------------
 # Registry
 # ------------------------------------------------------------------
 DATASET_COLLECTORS: dict[
@@ -507,6 +534,9 @@ DATASET_COLLECTORS: dict[
     "mc4_ko": (collect_mc4_ko, True),
     "wikipedia_ko": (collect_wikipedia_ko, True),
     "opus_en_ko": (collect_opus_en_ko, False),
+    "ko_triplet": (collect_ko_triplet, False),
+    "ko_wikidata_qa": (collect_ko_wikidata_qa, False),
+    "ko_alpaca_bingsu": (collect_ko_alpaca_bingsu, False),
 }
 
 
