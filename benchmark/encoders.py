@@ -304,6 +304,7 @@ class NeuralSparseEncoderV28:
         checkpoint_path: Union[str, Path] = "outputs/train_v28_ddp/checkpoint_epoch25_step41850/model.pt",
         device: str = "cuda",
         max_length: int = 192,
+        threshold: float = 1e-3,
     ):
         """
         Initialize V28 neural sparse encoder.
@@ -312,7 +313,9 @@ class NeuralSparseEncoderV28:
             checkpoint_path: Path to PyTorch checkpoint file
             device: Device to run model on
             max_length: Maximum sequence length
+            threshold: Minimum activation threshold for sparse vectors
         """
+        self.threshold = threshold
         self.device = device
         self.max_length = max_length
         checkpoint_path = Path(checkpoint_path)
@@ -402,7 +405,7 @@ class NeuralSparseEncoderV28:
             # Min threshold: OpenSearch requires positive normal
             # floats (>= 1.17549435e-38). Use 1e-3 to also
             # filter noise from context gate.
-            nonzero_mask = vec > 1e-3
+            nonzero_mask = vec > self.threshold
             nonzero_indices = nonzero_mask.nonzero(as_tuple=True)[0]
 
             sparse_dict = {}
