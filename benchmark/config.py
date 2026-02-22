@@ -36,6 +36,8 @@ class BenchmarkConfig:
 
     # Neural sparse settings
     neural_sparse_max_length: int = 192  # V25 uses 192
+    query_max_length: int = 64
+    doc_max_length: int = 256
 
     # Benchmark settings
     sample_size: int = 2000

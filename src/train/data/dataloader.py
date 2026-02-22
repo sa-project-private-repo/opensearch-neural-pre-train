@@ -23,6 +23,8 @@ class TripletCollator:
         self,
         tokenizer: PreTrainedTokenizer,
         max_length: int = 256,
+        query_max_length: Optional[int] = None,
+        doc_max_length: Optional[int] = None,
         use_in_batch_negatives: bool = True,
     ):
         """
@@ -30,11 +32,15 @@ class TripletCollator:
 
         Args:
             tokenizer: HuggingFace tokenizer
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (fallback)
+            query_max_length: Max length for queries (None=max_length)
+            doc_max_length: Max length for documents (None=max_length)
             use_in_batch_negatives: Whether to use in-batch negatives
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.query_max_length = query_max_length or max_length
+        self.doc_max_length = doc_max_length or max_length
         self.use_in_batch_negatives = use_in_batch_negatives
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -59,12 +65,12 @@ class TripletCollator:
                 neg = item["positive"]
             negatives.append(neg)
 
-        # Tokenize all texts
+        # Tokenize all texts (asymmetric lengths)
         query_encoding = self.tokenizer(
             queries,
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.query_max_length,
             return_tensors="pt",
         )
 
@@ -72,7 +78,7 @@ class TripletCollator:
             positives,
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.doc_max_length,
             return_tensors="pt",
         )
 
@@ -80,7 +86,7 @@ class TripletCollator:
             negatives,
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.doc_max_length,
             return_tensors="pt",
         )
 
@@ -113,6 +119,8 @@ def create_dataloader(
     tokenizer: PreTrainedTokenizer,
     batch_size: int = 32,
     max_length: int = 256,
+    query_max_length: Optional[int] = None,
+    doc_max_length: Optional[int] = None,
     num_workers: int = 4,
     shuffle: bool = True,
     use_in_batch_negatives: bool = True,
@@ -129,7 +137,9 @@ def create_dataloader(
         dataset: Dataset to load from
         tokenizer: HuggingFace tokenizer
         batch_size: Batch size (per GPU if distributed)
-        max_length: Maximum sequence length
+        max_length: Maximum sequence length (fallback)
+        query_max_length: Max length for queries (None=max_length)
+        doc_max_length: Max length for documents (None=max_length)
         num_workers: Number of worker processes
         shuffle: Whether to shuffle data
         use_in_batch_negatives: Whether to use in-batch negatives
@@ -145,6 +155,8 @@ def create_dataloader(
     collator = TripletCollator(
         tokenizer=tokenizer,
         max_length=max_length,
+        query_max_length=query_max_length,
+        doc_max_length=doc_max_length,
         use_in_batch_negatives=use_in_batch_negatives,
     )
 

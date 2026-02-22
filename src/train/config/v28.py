@@ -130,6 +130,8 @@ class V28Config(BaseConfig):
         val_files=["data/v24.0/val.jsonl"],
         batch_size=24,
         max_length=192,
+        query_max_length=64,
+        doc_max_length=256,
         num_workers=4,
     ))
     """Data configuration."""
@@ -315,6 +317,8 @@ def create_default_v28_config(
             val_files=val_files,
             batch_size=batch_size,
             max_length=192,
+            query_max_length=64,
+            doc_max_length=256,
             num_workers=4,
         ),
         loss=V28LossConfig(

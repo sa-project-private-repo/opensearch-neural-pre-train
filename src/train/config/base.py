@@ -5,7 +5,7 @@ Provides type-safe, validated configuration objects with sensible defaults.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Literal
+from typing import List, Literal, Optional
 from pathlib import Path
 
 
@@ -45,6 +45,12 @@ class DataConfig:
     max_length: int = 64
     """Maximum sequence length for tokenization."""
 
+    query_max_length: Optional[int] = None
+    """Maximum sequence length for queries. If None, uses max_length."""
+
+    doc_max_length: Optional[int] = None
+    """Maximum sequence length for documents. If None, uses max_length."""
+
     num_workers: int = 4
     """Number of data loading workers."""
 
@@ -53,6 +59,16 @@ class DataConfig:
 
     pin_memory: bool = True
     """Whether to pin memory for faster GPU transfer."""
+
+    @property
+    def effective_query_max_length(self) -> int:
+        """Get effective max length for queries."""
+        return self.query_max_length or self.max_length
+
+    @property
+    def effective_doc_max_length(self) -> int:
+        """Get effective max length for documents."""
+        return self.doc_max_length or self.max_length
 
 
 @dataclass

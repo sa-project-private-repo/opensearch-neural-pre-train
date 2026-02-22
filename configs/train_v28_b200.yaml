@@ -31,7 +31,9 @@ data:
   val_files:
     - "data/v29.0/val.jsonl"
   batch_size: 32           # per GPU (64 causes OOM on 250K vocab logits)
-  max_length: 192
+  max_length: 192          # fallback
+  query_max_length: 64     # queries are short (p90=56 tokens)
+  doc_max_length: 256      # documents need more (p90=275 tokens)
   num_workers: 4
 
 # Loss Configuration (FIXED for collapse prevention)

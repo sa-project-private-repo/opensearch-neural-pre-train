@@ -79,6 +79,8 @@ class NeuralSparseEncoder:
         model_path: Union[str, Path] = "huggingface/v21.4",
         device: str = "cuda",
         max_length: int = 64,
+        query_max_length: Optional[int] = None,
+        doc_max_length: Optional[int] = None,
     ):
         """
         Initialize neural sparse encoder.
@@ -86,10 +88,14 @@ class NeuralSparseEncoder:
         Args:
             model_path: Path to trained model directory
             device: Device to run model on
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (fallback)
+            query_max_length: Max length for queries (None=max_length)
+            doc_max_length: Max length for documents (None=max_length)
         """
         self.device = device
         self.max_length = max_length
+        self.query_max_length = query_max_length or max_length
+        self.doc_max_length = doc_max_length or max_length
         model_path = Path(model_path)
 
         logger.info(f"Loading neural sparse model from: {model_path}")
@@ -127,8 +133,13 @@ class NeuralSparseEncoder:
         )
         logger.info(f"Built token lookup table with {len(self._token_lookup)} entries")
 
-    def _create_collate_fn(self):
-        """Create collate function for DataLoader."""
+    def _create_collate_fn(self, max_length: Optional[int] = None):
+        """Create collate function for DataLoader.
+
+        Args:
+            max_length: Override max length (defaults to doc_max_length)
+        """
+        effective_length = max_length or self.doc_max_length
 
         def collate_fn(batch_texts: List[str]):
             return self.tokenizer(
@@ -136,7 +147,7 @@ class NeuralSparseEncoder:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.max_length,
+                max_length=effective_length,
             )
 
         return collate_fn
@@ -281,7 +292,7 @@ class NeuralSparseEncoder:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.query_max_length,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -308,6 +319,8 @@ class NeuralSparseEncoderV28:
         device: str = "cuda",
         max_length: int = 192,
         threshold: float = 1e-3,
+        query_max_length: Optional[int] = None,
+        doc_max_length: Optional[int] = None,
     ):
         """
         Initialize V28 neural sparse encoder.
@@ -315,12 +328,16 @@ class NeuralSparseEncoderV28:
         Args:
             checkpoint_path: Path to PyTorch checkpoint file
             device: Device to run model on
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (fallback)
             threshold: Minimum activation threshold for sparse vectors
+            query_max_length: Max length for queries (None=max_length)
+            doc_max_length: Max length for documents (None=max_length)
         """
         self.threshold = threshold
         self.device = device
         self.max_length = max_length
+        self.query_max_length = query_max_length or max_length
+        self.doc_max_length = doc_max_length or max_length
         checkpoint_path = Path(checkpoint_path)
 
         logger.warning(
@@ -371,8 +388,13 @@ class NeuralSparseEncoderV28:
             f"V28 neural sparse model loaded with Context Gate, vocab_size: {self.vocab_size}"
         )
 
-    def _create_collate_fn(self):
-        """Create collate function for DataLoader."""
+    def _create_collate_fn(self, max_length: Optional[int] = None):
+        """Create collate function for DataLoader.
+
+        Args:
+            max_length: Override max length (defaults to doc_max_length)
+        """
+        effective_length = max_length or self.doc_max_length
 
         def collate_fn(batch_texts: List[str]):
             return self.tokenizer(
@@ -380,7 +402,7 @@ class NeuralSparseEncoderV28:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.max_length,
+                max_length=effective_length,
             )
 
         return collate_fn
@@ -515,7 +537,7 @@ class NeuralSparseEncoderV28:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.query_max_length,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         return self._encode_batch(inputs, top_k)[0]
@@ -536,6 +558,8 @@ class NeuralSparseEncoderV29:
         device: str = "cuda",
         max_length: int = 192,
         pooling: str = "sum",
+        query_max_length: Optional[int] = None,
+        doc_max_length: Optional[int] = None,
     ):
         """
         Initialize V29 neural sparse encoder.
@@ -543,11 +567,15 @@ class NeuralSparseEncoderV29:
         Args:
             checkpoint_path: Path to PyTorch checkpoint file
             device: Device to run model on
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (fallback)
             pooling: Pooling method ("sum" or "max")
+            query_max_length: Max length for queries (None=max_length)
+            doc_max_length: Max length for documents (None=max_length)
         """
         self.device = device
         self.max_length = max_length
+        self.query_max_length = query_max_length or max_length
+        self.doc_max_length = doc_max_length or max_length
         checkpoint_path = Path(checkpoint_path)
 
         logger.info(f"Loading V29 neural sparse model from: {checkpoint_path}")
@@ -594,8 +622,13 @@ class NeuralSparseEncoderV29:
             f"V29 neural sparse model loaded with Context Gate (pooling={pooling}), vocab_size: {self.vocab_size}"
         )
 
-    def _create_collate_fn(self):
-        """Create collate function for DataLoader."""
+    def _create_collate_fn(self, max_length: Optional[int] = None):
+        """Create collate function for DataLoader.
+
+        Args:
+            max_length: Override max length (defaults to doc_max_length)
+        """
+        effective_length = max_length or self.doc_max_length
 
         def collate_fn(batch_texts: List[str]):
             return self.tokenizer(
@@ -603,7 +636,7 @@ class NeuralSparseEncoderV29:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.max_length,
+                max_length=effective_length,
             )
 
         return collate_fn
@@ -726,7 +759,7 @@ class NeuralSparseEncoderV29:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.query_max_length,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         return self._encode_batch(inputs, top_k)[0]
@@ -747,6 +780,8 @@ def create_encoders(config: BenchmarkConfig) -> tuple:
         device=config.device,
     )
     max_length = getattr(config, "neural_sparse_max_length", 192)
+    q_len = getattr(config, "query_max_length", None)
+    d_len = getattr(config, "doc_max_length", None)
 
     # Check for V28 context gate checkpoint
     context_gate_path = Path(config.neural_sparse_path) / "context_gate.pt"
@@ -764,12 +799,16 @@ def create_encoders(config: BenchmarkConfig) -> tuple:
             checkpoint_path=checkpoint_path,
             device=config.device,
             max_length=max_length,
+            query_max_length=q_len,
+            doc_max_length=d_len,
         )
     else:
         sparse_encoder = NeuralSparseEncoder(
             model_path=config.neural_sparse_path,
             device=config.device,
             max_length=max_length,
+            query_max_length=q_len,
+            doc_max_length=d_len,
         )
     return dense_encoder, sparse_encoder
 
@@ -796,40 +835,14 @@ def create_encoders_v28(
         device=config.device,
     )
     max_length = getattr(config, "neural_sparse_max_length", 192)
+    q_len = getattr(config, "query_max_length", None)
+    d_len = getattr(config, "doc_max_length", None)
     sparse_encoder = NeuralSparseEncoderV28(
         checkpoint_path=checkpoint_path,
         device=config.device,
         max_length=max_length,
-    )
-    return dense_encoder, sparse_encoder
-
-
-def create_encoders_v28(
-    config: BenchmarkConfig,
-    checkpoint_path: str = "outputs/train_v28/checkpoint_epoch25_step280825/model.pt",
-) -> tuple:
-    """
-    Create encoders with V28 sparse encoder.
-
-    V28 uses SPLADEDocContextGated architecture that requires loading
-    from PyTorch checkpoint to preserve Context Gate weights.
-
-    Args:
-        config: Benchmark configuration
-        checkpoint_path: Path to V28 PyTorch checkpoint
-
-    Returns:
-        Tuple of (dense_encoder, sparse_encoder_v28)
-    """
-    dense_encoder = BgeM3Encoder(
-        model_name=config.bge_m3_model,
-        device=config.device,
-    )
-    max_length = getattr(config, "neural_sparse_max_length", 192)
-    sparse_encoder = NeuralSparseEncoderV28(
-        checkpoint_path=checkpoint_path,
-        device=config.device,
-        max_length=max_length,
+        query_max_length=q_len,
+        doc_max_length=d_len,
     )
     return dense_encoder, sparse_encoder
 
@@ -858,11 +871,15 @@ def create_encoders_v29(
         device=config.device,
     )
     max_length = getattr(config, "neural_sparse_max_length", 192)
+    q_len = getattr(config, "query_max_length", None)
+    d_len = getattr(config, "doc_max_length", None)
     sparse_encoder = NeuralSparseEncoderV29(
         checkpoint_path=checkpoint_path,
         device=config.device,
         max_length=max_length,
         pooling=pooling,
+        query_max_length=q_len,
+        doc_max_length=d_len,
     )
     return dense_encoder, sparse_encoder
 
@@ -881,6 +898,8 @@ class NeuralSparseEncoderV30:
         device: str = "cuda",
         max_length: int = 192,
         pooling: str = "max",
+        query_max_length: Optional[int] = None,
+        doc_max_length: Optional[int] = None,
     ):
         """
         Initialize V30 neural sparse encoder.
@@ -888,11 +907,15 @@ class NeuralSparseEncoderV30:
         Args:
             checkpoint_path: Path to PyTorch checkpoint file
             device: Device to run model on
-            max_length: Maximum sequence length
+            max_length: Maximum sequence length (fallback)
             pooling: Pooling method ("sum" or "max")
+            query_max_length: Max length for queries (None=max_length)
+            doc_max_length: Max length for documents (None=max_length)
         """
         self.device = device
         self.max_length = max_length
+        self.query_max_length = query_max_length or max_length
+        self.doc_max_length = doc_max_length or max_length
         checkpoint_path = Path(checkpoint_path)
 
         logger.info(f"Loading V30 neural sparse model from: {checkpoint_path}")
@@ -937,8 +960,13 @@ class NeuralSparseEncoderV30:
             f"V30 neural sparse model loaded (pooling={pooling}), vocab_size: {self.vocab_size}"
         )
 
-    def _create_collate_fn(self):
-        """Create collate function for DataLoader."""
+    def _create_collate_fn(self, max_length: Optional[int] = None):
+        """Create collate function for DataLoader.
+
+        Args:
+            max_length: Override max length (defaults to doc_max_length)
+        """
+        effective_length = max_length or self.doc_max_length
 
         def collate_fn(batch_texts: List[str]):
             return self.tokenizer(
@@ -946,7 +974,7 @@ class NeuralSparseEncoderV30:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.max_length,
+                max_length=effective_length,
             )
 
         return collate_fn
@@ -1069,7 +1097,7 @@ class NeuralSparseEncoderV30:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=self.max_length,
+            max_length=self.query_max_length,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         return self._encode_batch(inputs, top_k)[0]
@@ -1097,10 +1125,14 @@ def create_encoders_v30(
         device=config.device,
     )
     max_length = getattr(config, "neural_sparse_max_length", 192)
+    q_len = getattr(config, "query_max_length", None)
+    d_len = getattr(config, "doc_max_length", None)
     sparse_encoder = NeuralSparseEncoderV30(
         checkpoint_path=checkpoint_path,
         device=config.device,
         max_length=max_length,
         pooling="max",
+        query_max_length=q_len,
+        doc_max_length=d_len,
     )
     return dense_encoder, sparse_encoder

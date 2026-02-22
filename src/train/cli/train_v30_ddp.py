@@ -277,6 +277,8 @@ def create_dataloader_ddp(
     max_length: int,
     num_workers: int,
     is_train: bool = True,
+    query_max_length: Optional[int] = None,
+    doc_max_length: Optional[int] = None,
 ) -> DataLoader:
     """Create distributed dataloader."""
     sampler = DistributedSampler(
@@ -289,6 +291,8 @@ def create_dataloader_ddp(
     collator = TripletCollator(
         tokenizer=tokenizer,
         max_length=max_length,
+        query_max_length=query_max_length,
+        doc_max_length=doc_max_length,
         use_in_batch_negatives=True,
     )
 
@@ -570,6 +574,8 @@ def main():
         max_length=config.data.max_length,
         num_workers=config.data.num_workers,
         is_train=True,
+        query_max_length=config.data.query_max_length,
+        doc_max_length=config.data.doc_max_length,
     )
 
     # Create optimizer

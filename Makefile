@@ -17,7 +17,8 @@
 	mine-v30-negatives train-v30-ddp train-v30-bg train-v30-resume benchmark-v30-ko-strategyqa logs-v30 v30-pipeline \
 	info compute-idf-rust collect-v29-data build-v29-data v29-data-stats mine-hard-negatives \
 	train-v28-ddp train-v28-ddp-bg train-v28-ddp-resume logs-v28-ddp tensorboard-v28-ddp \
-	v29-pipeline-bg benchmark-ko-strategyqa lint format clean-cache
+	v29-pipeline-bg benchmark-ko-strategyqa lint format clean-cache \
+	prepare-mlm-data pretrain-mlm pretrain-mlm-bg logs-mlm mlm-pipeline
 
 # Default target
 .DEFAULT_GOAL := help
@@ -1006,6 +1007,59 @@ v30-pipeline: ## Run full V30 pipeline (mine negatives -> train -> benchmark)
 	@echo "  make train-v30-bg    (background)"
 	@echo ""
 	@echo "$(GREEN)✓ Pipeline step 1 complete$(NC)"
+
+##@ Korean MLM Pre-training
+
+# MLM directories
+MLM_DATA_DIR := data/mlm_korean
+MLM_OUTPUT_DIR := outputs/pretrain_mlm
+CONFIG_MLM := configs/pretrain_mlm.yaml
+
+prepare-mlm-data: ## Prepare Korean text data for MLM pre-training
+	@echo "$(BLUE)Preparing Korean MLM data...$(NC)"
+	@mkdir -p $(MLM_DATA_DIR)
+	@$(PYTHON) scripts/prepare_korean_mlm_data.py \
+		--output-dir $(MLM_DATA_DIR) \
+		--max-mc4 500000
+	@echo "$(GREEN)OK MLM data ready$(NC)"
+
+pretrain-mlm: ## Korean MLM pre-training on XLM-R (B200 x8 DDP)
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "$(GREEN)Korean MLM Pre-training (XLM-R)$(NC)"
+	@echo "$(BLUE)========================================$(NC)"
+	@echo "Config: $(CONFIG_MLM)"
+	@echo "Output: $(MLM_OUTPUT_DIR)"
+	@echo ""
+	@GPU_COUNT=$$(nvidia-smi -L 2>/dev/null | wc -l || echo "1"); \
+	$(VENV)/bin/torchrun \
+		--nproc_per_node=$$GPU_COUNT \
+		-m src.train.cli.pretrain_mlm \
+		--config $(CONFIG_MLM) \
+		--output-dir $(MLM_OUTPUT_DIR)
+
+pretrain-mlm-bg: ## Korean MLM pre-training in background
+	@echo "$(BLUE)Starting MLM pre-training in background...$(NC)"
+	@mkdir -p $(MLM_OUTPUT_DIR)
+	@GPU_COUNT=$$(nvidia-smi -L 2>/dev/null | wc -l || echo "1"); \
+	nohup $(VENV)/bin/torchrun \
+		--nproc_per_node=$$GPU_COUNT \
+		-m src.train.cli.pretrain_mlm \
+		--config $(CONFIG_MLM) \
+		--output-dir $(MLM_OUTPUT_DIR) \
+		> $(MLM_OUTPUT_DIR)/nohup.out 2>&1 &
+	@echo "$(GREEN)MLM pre-training started$(NC)"
+	@echo "Log: $(MLM_OUTPUT_DIR)/nohup.out"
+
+logs-mlm: ## Show MLM pre-training logs
+	@if [ -f $(MLM_OUTPUT_DIR)/nohup.out ]; then \
+		tail -f $(MLM_OUTPUT_DIR)/nohup.out; \
+	else \
+		echo "$(RED)No logs found. Run: make pretrain-mlm$(NC)"; \
+	fi
+
+mlm-pipeline: ## Full MLM pipeline (data -> pretrain)
+	@$(MAKE) prepare-mlm-data
+	@$(MAKE) pretrain-mlm
 
 ##@ Monitoring
 
