@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""BM25-based hard negative mining for V29 training data.
+"""TF-IDF-based hard negative mining for V29 training data.
 
 Phase 1: Collect unique positive documents from all shards (up to --max-corpus).
-Phase 2: Build BM25Okapi index on tokenized documents.
-Phase 3: For each sample without a negative, query BM25, pick best non-positive.
+Phase 2: Build TF-IDF index on documents using char n-gram vectorizer.
+Phase 3: For each sample without a negative, batch-query TF-IDF cosine
+         similarity, pick best non-positive per query.
 """
 
 import argparse
@@ -14,7 +15,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from rank_bm25 import BM25Okapi
+import numpy as np
+from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 logging.basicConfig(
@@ -22,23 +26,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-def tokenize_korean(text: str) -> list[str]:
-    """Simple Korean tokenizer: whitespace tokens + 2-gram character tokens.
-
-    Args:
-        text: Input text to tokenize.
-
-    Returns:
-        List of string tokens.
-    """
-    words = text.split()
-    tokens = list(words)
-    for word in words:
-        for i in range(len(word) - 1):
-            tokens.append(word[i : i + 2])
-    return tokens
 
 
 def parse_shard_range(shard_range: str, num_shards: int) -> list[int]:
@@ -79,7 +66,9 @@ def collect_shard_files(data_dir: Path, shard_range: str) -> list[Path]:
         if idx < len(all_shards):
             selected.append(all_shards[idx])
         else:
-            logger.warning(f"Shard index {idx} out of range (max {len(all_shards)-1})")
+            logger.warning(
+                f"Shard index {idx} out of range (max {len(all_shards) - 1})"
+            )
     return selected
 
 
@@ -120,58 +109,35 @@ def build_corpus(shard_files: list[Path], max_corpus: int) -> list[str]:
     return corpus
 
 
-def build_bm25_index(corpus: list[str]) -> tuple[BM25Okapi, list[str]]:
-    """Tokenize corpus and build BM25Okapi index.
+def build_tfidf_index(
+    corpus: list[str],
+) -> tuple[TfidfVectorizer, csr_matrix, list[str]]:
+    """Fit TF-IDF vectorizer and transform corpus into sparse matrix.
+
+    Uses character n-gram (2-3) features which handle Korean well without
+    requiring a language-specific tokenizer.
 
     Args:
         corpus: List of document strings.
 
     Returns:
-        Tuple of (BM25Okapi index, corpus list).
+        Tuple of (fitted TfidfVectorizer, corpus TF-IDF matrix, corpus list).
     """
-    logger.info("Phase 2: Building BM25 index...")
-    tokenized = [tokenize_korean(doc) for doc in tqdm(corpus, desc="Tokenizing")]
-    index = BM25Okapi(tokenized)
-    logger.info("BM25 index built")
-    return index, corpus
-
-
-def find_hard_negative(
-    query: str,
-    positive: str,
-    bm25: BM25Okapi,
-    corpus: list[str],
-    top_k: int,
-) -> str | None:
-    """Search BM25 index and return the best non-positive result.
-
-    Args:
-        query: Query string.
-        positive: Positive document to exclude.
-        bm25: BM25Okapi index.
-        corpus: Document corpus aligned with the index.
-        top_k: Number of top results to retrieve.
-
-    Returns:
-        Best hard negative document string, or None if not found.
-    """
-    query_tokens = tokenize_korean(query)
-    if not query_tokens:
-        return None
-
-    scores = bm25.get_scores(query_tokens)
-
-    # Get top-k indices by score descending
-    top_indices = sorted(
-        range(len(scores)), key=lambda i: scores[i], reverse=True
-    )[:top_k]
-
-    for idx in top_indices:
-        candidate = corpus[idx]
-        if candidate != positive:
-            return candidate
-
-    return None
+    logger.info("Phase 2: Building TF-IDF index...")
+    vectorizer = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=(2, 3),
+        max_features=100_000,
+        sublinear_tf=True,
+    )
+    corpus_tfidf: csr_matrix = vectorizer.fit_transform(
+        tqdm(corpus, desc="Fitting TF-IDF")
+    )
+    logger.info(
+        f"TF-IDF index built: {corpus_tfidf.shape[0]} docs, "
+        f"{corpus_tfidf.shape[1]} features"
+    )
+    return vectorizer, corpus_tfidf, corpus
 
 
 def count_missing_negatives(shard_file: Path) -> tuple[int, int]:
@@ -202,19 +168,28 @@ def count_missing_negatives(shard_file: Path) -> tuple[int, int]:
 
 def process_shard(
     shard_file: Path,
-    bm25: BM25Okapi,
+    vectorizer: TfidfVectorizer,
+    corpus_tfidf: csr_matrix,
     corpus: list[str],
     top_k: int,
+    batch_size: int,
     output_dir: Path | None,
     dry_run: bool,
 ) -> dict[str, int]:
-    """Process a single shard: fill missing negatives and write output.
+    """Process a single shard: fill missing negatives via batched TF-IDF search.
+
+    Queries needing a negative are grouped into batches of `batch_size`,
+    transformed with the fitted vectorizer, and scored against the full corpus
+    in one cosine_similarity call.  The top-k candidates per query are scanned
+    to find the best non-positive document.
 
     Args:
         shard_file: Path to input shard file.
-        bm25: BM25Okapi index.
-        corpus: Document corpus.
-        top_k: BM25 search depth.
+        vectorizer: Fitted TfidfVectorizer.
+        corpus_tfidf: Pre-computed TF-IDF matrix for the corpus (n_docs x vocab).
+        corpus: Document corpus aligned with corpus_tfidf.
+        top_k: Number of top candidates to retrieve per query.
+        batch_size: Number of queries to process per TF-IDF batch.
         output_dir: Output directory (None = overwrite in place).
         dry_run: If True, skip writing.
 
@@ -228,8 +203,8 @@ def process_shard(
         "failed": 0,
     }
 
-    updated_records: list[str] = []
-
+    # Read all records
+    records: list[dict[str, Any]] = []
     with open(shard_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -239,26 +214,49 @@ def process_shard(
                 record: dict[str, Any] = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            records.append(record)
 
-            stats["total"] += 1
+    stats["total"] = len(records)
 
-            if record.get("negative"):
-                stats["already_had_negative"] += 1
-                updated_records.append(json.dumps(record, ensure_ascii=False))
-                continue
+    # Separate records that already have a negative
+    need_negative_idx: list[int] = []
+    for i, rec in enumerate(records):
+        if rec.get("negative"):
+            stats["already_had_negative"] += 1
+        else:
+            need_negative_idx.append(i)
 
-            query = record.get("query", "")
-            positive = record.get("positive", "")
+    # Process records needing negatives in batches
+    for batch_start in range(0, len(need_negative_idx), batch_size):
+        batch_indices = need_negative_idx[batch_start : batch_start + batch_size]
+        batch_queries = [records[i].get("query", "") for i in batch_indices]
+        batch_positives = [records[i].get("positive", "") for i in batch_indices]
 
-            negative = find_hard_negative(query, positive, bm25, corpus, top_k)
+        # Vectorize batch queries
+        q_tfidf: csr_matrix = vectorizer.transform(batch_queries)
+
+        # Compute cosine similarity: (batch_size, n_corpus)
+        scores: np.ndarray = cosine_similarity(q_tfidf, corpus_tfidf)
+
+        # For each query find best non-positive from top-k candidates
+        top_indices: np.ndarray = np.argsort(-scores, axis=1)[:, :top_k]
+
+        for j, record_idx in enumerate(batch_indices):
+            positive = batch_positives[j]
+            negative: str | None = None
+
+            for corpus_idx in top_indices[j]:
+                candidate = corpus[corpus_idx]
+                if candidate != positive:
+                    negative = candidate
+                    break
+
             if negative:
-                record["negative"] = negative
-                record["difficulty"] = "hard"
+                records[record_idx]["negative"] = negative
+                records[record_idx]["difficulty"] = "hard"
                 stats["added"] += 1
             else:
                 stats["failed"] += 1
-
-            updated_records.append(json.dumps(record, ensure_ascii=False))
 
     if dry_run:
         return stats
@@ -276,8 +274,8 @@ def process_shard(
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for rec_line in updated_records:
-                f.write(rec_line + "\n")
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         os.replace(tmp_path, out_path)
     except Exception:
         os.unlink(tmp_path)
@@ -322,7 +320,7 @@ def print_stats_summary(
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="BM25 hard negative mining for V29 training data",
+        description="TF-IDF hard negative mining for V29 training data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -347,13 +345,19 @@ def parse_args() -> argparse.Namespace:
         "--top-k",
         type=int,
         default=10,
-        help="BM25 search depth (top-k candidates to consider)",
+        help="TF-IDF search depth (top-k candidates to consider per query)",
     )
     parser.add_argument(
         "--shard-range",
         type=str,
         default="all",
         help='Shard range to process: "all", "0-10", or "5"',
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Number of queries to batch per TF-IDF cosine similarity call",
     )
     parser.add_argument(
         "--dry-run",
@@ -364,7 +368,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Entry point for BM25 hard negative mining."""
+    """Entry point for TF-IDF hard negative mining."""
     args = parse_args()
 
     data_dir: Path = args.data_dir
@@ -380,8 +384,8 @@ def main() -> None:
     # Phase 1: build corpus
     corpus = build_corpus(shard_files, args.max_corpus)
 
-    # Phase 2: build BM25 index
-    bm25, corpus = build_bm25_index(corpus)
+    # Phase 2: build TF-IDF index
+    vectorizer, corpus_tfidf, corpus = build_tfidf_index(corpus)
 
     # Phase 3: process shards
     logger.info("Phase 3: Mining hard negatives for samples without negatives...")
@@ -390,9 +394,11 @@ def main() -> None:
     for shard_file in tqdm(shard_files, desc="Processing shards"):
         stats = process_shard(
             shard_file=shard_file,
-            bm25=bm25,
+            vectorizer=vectorizer,
+            corpus_tfidf=corpus_tfidf,
             corpus=corpus,
             top_k=args.top_k,
+            batch_size=args.batch_size,
             output_dir=args.output_dir,
             dry_run=args.dry_run,
         )
