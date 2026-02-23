@@ -116,7 +116,7 @@ class IndexManager:
         logger.info(f"Created index: {index_name}")
 
     def create_sparse_index(self) -> None:
-        """Create sparse vector index with rank_features for neural sparse search."""
+        """Create sparse vector index with sparse_vector type for neural sparse ANN search."""
         index_name = self.config.sparse_index
         if self.client.indices.exists(index=index_name):
             logger.info(f"Index {index_name} already exists, skipping creation")
@@ -124,6 +124,9 @@ class IndexManager:
 
         body = {
             "settings": {
+                "index": {
+                    "sparse": True,
+                },
                 "number_of_shards": 6,
                 "number_of_replicas": 2,
             },
@@ -131,7 +134,17 @@ class IndexManager:
                 "properties": {
                     "doc_id": {"type": "keyword"},
                     "content": {"type": "text"},
-                    "sparse_embedding": {"type": "rank_features"},
+                    "sparse_embedding": {
+                        "type": "sparse_vector",
+                        "method": {
+                            "name": "seismic",
+                            "parameters": {
+                                "n_postings": 300,
+                                "cluster_ratio": 0.1,
+                                "summary_prune_ratio": 0.4,
+                            },
+                        },
+                    },
                 }
             },
         }

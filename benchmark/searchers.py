@@ -128,7 +128,7 @@ class SemanticSearcher(BaseSearcher):
 
 
 class NeuralSparseSearcher(BaseSearcher):
-    """Neural sparse search using rank_features."""
+    """Neural sparse search using sparse_vector ANN (SEISMIC)."""
 
     def __init__(
         self,

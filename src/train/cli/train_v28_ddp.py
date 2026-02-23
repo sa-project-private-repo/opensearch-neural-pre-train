@@ -99,10 +99,29 @@ def is_main_process():
 
 
 def create_v28_config(args: argparse.Namespace) -> V28Config:
-    """Create V28 config with FIXED parameters to prevent collapse."""
+    """Create V28 config from YAML file or defaults."""
+    if args.config:
+        from src.train.config.loader import load_config
+        config = load_config(config_path=args.config, config_type=V28Config)
+        # CLI overrides
+        if args.output_dir != "outputs/train_v28_ddp":
+            config.training.output_dir = args.output_dir
+        if args.epochs != 30:
+            config.training.num_epochs = args.epochs
+        if args.lr != 3e-5:
+            config.training.learning_rate = args.lr
+        if args.batch_size != 32:
+            config.data.batch_size = args.batch_size
+        if args.grad_accum != 2:
+            config.training.gradient_accumulation_steps = args.grad_accum
+        if args.no_language_filtering:
+            config.loss.enable_language_filtering = False
+        if args.no_context_gate:
+            config.model.use_context_gate = False
+            config.loss.use_context_gate = False
+        return config
 
-    # Key fix: Reduced non_korean_penalty from 100.0 to 5.0
-    # and reduced lambda_language from 0.5 to 0.3
+    # Fallback: build config from CLI args (legacy behavior)
     config = V28Config(
         model=V28ModelConfig(
             name="xlm-roberta-base",
@@ -121,18 +140,13 @@ def create_v28_config(args: argparse.Namespace) -> V28Config:
             num_workers=4,
         ),
         loss=V28LossConfig(
-            # === CRITICAL FIX: Reduced penalties to prevent collapse ===
             enable_language_filtering=not args.no_language_filtering,
-            non_korean_penalty=args.non_korean_penalty,  # 5.0 instead of 100.0
-            lambda_language=args.lambda_language,  # 0.3 instead of 0.5
+            non_korean_penalty=args.non_korean_penalty,
+            lambda_language=args.lambda_language,
             korean_token_penalty=0.0,
-
-            # Context gate settings
             use_context_gate=not args.no_context_gate,
             context_gate_hidden=256,
             context_attention_heads=4,
-
-            # Standard loss weights
             lambda_infonce=2.5,
             lambda_self=1.0,
             lambda_positive=0.5,
@@ -141,8 +155,6 @@ def create_v28_config(args: argparse.Namespace) -> V28Config:
             temperature=0.07,
             top_k=256,
             min_activation=0.1,
-
-            # Stopword masking
             use_stopword_mask=True,
             stopword_penalty=50.0,
         ),
@@ -162,7 +174,6 @@ def create_v28_config(args: argparse.Namespace) -> V28Config:
         seed=args.seed,
         enable_curriculum=True,
     )
-
     return config
 
 
@@ -175,6 +186,7 @@ def create_model(config: V28Config, device: torch.device) -> nn.Module:
             use_mlm_head=config.model.use_expansion,
             gate_hidden=config.model.context_gate_hidden,
             gate_heads=config.model.context_attention_heads,
+            top_k_sparse=getattr(config.model, 'top_k_sparse', 0),
         )
         logger.info("Created SPLADEDocContextGated model")
     else:
@@ -240,6 +252,7 @@ def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Mod
         min_activation=config.loss.min_activation,
         stopword_mask=stopword_mask,
         stopword_penalty=config.loss.stopword_penalty,
+        flops_warmup_steps=getattr(config.loss, 'flops_warmup_steps', 0),
     )
 
     return loss_fn.to(device)
@@ -376,10 +389,12 @@ def train_epoch(
                 # Get metrics from loss_fn
                 semantic_ratio = loss_fn.get_average_semantic_ratio() if hasattr(loss_fn, 'get_average_semantic_ratio') else 0
                 korean_ratio = loss_fn.get_average_korean_ratio() if hasattr(loss_fn, 'get_average_korean_ratio') else 0
+                active_tokens = loss_dict.get("active_tokens", 0)
 
                 logger.info(
                     f"Step {global_step} - loss: {loss.item() * config.training.gradient_accumulation_steps:.4f}, "
-                    f"lr: {lr:.2e}, semantic_ratio: {semantic_ratio:.4f}, korean_ratio: {korean_ratio:.4f}"
+                    f"lr: {lr:.2e}, semantic_ratio: {semantic_ratio:.4f}, korean_ratio: {korean_ratio:.4f}, "
+                    f"active_tokens: {active_tokens:.0f}"
                 )
 
                 if tb_logger:
@@ -387,6 +402,7 @@ def train_epoch(
                     tb_logger.log_scalar("train/lr", lr, global_step)
                     tb_logger.log_scalar("train/semantic_ratio", semantic_ratio, global_step)
                     tb_logger.log_scalar("train/korean_ratio", korean_ratio, global_step)
+                    tb_logger.log_scalar("train/active_tokens", active_tokens, global_step)
 
         total_loss += loss.item() * config.training.gradient_accumulation_steps
         num_batches += 1

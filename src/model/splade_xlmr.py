@@ -500,6 +500,7 @@ class SPLADEDocContextGated(SPLADEDocXLMR):
         use_mlm_head: bool = True,
         gate_hidden: int = 256,
         gate_heads: int = 4,
+        top_k_sparse: int = 0,  # 0 = disabled, >0 = keep only top-k activations
     ):
         """
         Initialize context-gated SPLADE model.
@@ -510,12 +511,15 @@ class SPLADEDocContextGated(SPLADEDocXLMR):
             use_mlm_head: Use MLM head for expansion
             gate_hidden: Hidden dimension for context gate
             gate_heads: Number of attention heads in context gate
+            top_k_sparse: If >0, keep only top-k activations during training
         """
         super().__init__(
             model_name=model_name,
             dropout=dropout,
             use_mlm_head=use_mlm_head,
         )
+
+        self.top_k_sparse = top_k_sparse
 
         # Context gate module
         self.context_gate = ContextGate(
@@ -571,6 +575,16 @@ class SPLADEDocContextGated(SPLADEDocXLMR):
 
         # Max pooling across sequence
         sparse_repr, _ = sparse_scores.max(dim=1)  # [batch, vocab_size]
+
+        # Top-k activation constraint (training only)
+        if self.top_k_sparse > 0 and self.training:
+            # Keep only top-k activations, zero the rest
+            topk_values, topk_indices = sparse_repr.topk(
+                min(self.top_k_sparse, sparse_repr.shape[-1]), dim=-1
+            )
+            mask = torch.zeros_like(sparse_repr)
+            mask.scatter_(1, topk_indices, 1.0)
+            sparse_repr = sparse_repr * mask
 
         # Per-position weights for analysis
         token_weights = sparse_scores.max(dim=-1).values  # [batch, seq_len]

@@ -59,6 +59,10 @@ class V28LossConfig(V26LossConfig):
     collapse_check_window: int = 3
     """Consecutive low-flops checks before halving penalty."""
 
+    # FLOPS warmup
+    flops_warmup_steps: int = 0
+    """Steps to linearly warmup FLOPS penalty from 0 to lambda_flops."""
+
     # ===== V28b: Context-Gated Expansion =====
     use_context_gate: bool = True
     """Enable context-gated sparse expansion."""
@@ -95,6 +99,9 @@ class V28ModelConfig(V24ModelConfig):
 
     context_attention_heads: int = 4
     """Number of attention heads in context gate."""
+
+    top_k_sparse: int = 0
+    """Top-k activation constraint during training (0=disabled)."""
 
 
 @dataclass

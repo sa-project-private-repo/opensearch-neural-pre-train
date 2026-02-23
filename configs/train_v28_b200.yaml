@@ -23,6 +23,7 @@ model:
   use_context_gate: true
   context_gate_hidden: 256
   context_attention_heads: 4
+  top_k_sparse: 256            # Keep only top-256 activations during training
 
 # Data Configuration (V29 expanded dataset)
 data:
