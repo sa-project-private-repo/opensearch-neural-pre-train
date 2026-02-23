@@ -43,7 +43,9 @@ loss:
   lambda_self: 0.5
   lambda_positive: 2.0
   lambda_margin: 0.0
-  lambda_flops: 0.010
+  # Increased 500x from 0.010 to enforce sparsity (target: 50-300 active tokens)
+  lambda_flops: 5.0
+  flops_warmup_steps: 3000  # Gradually ramp FLOPS penalty to avoid early collapse
   lambda_min_act: 5.0     # 5x increase to prevent collapse
   lambda_kd: 2.0
 

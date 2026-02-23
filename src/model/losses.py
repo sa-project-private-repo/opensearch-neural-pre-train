@@ -1729,6 +1729,7 @@ class SPLADELossV28(SPLADELossV26):
         lambda_positive: float = 2.0,
         lambda_margin: float = 0.0,
         lambda_flops: float = 0.010,
+        flops_warmup_steps: int = 0,
         lambda_min_act: float = 5.0,
         lambda_kd: float = 2.0,
         # Hyperparameters
@@ -1783,6 +1784,10 @@ class SPLADELossV28(SPLADELossV26):
             stopword_penalty=stopword_penalty,
             teacher_model=teacher_model,
         )
+
+        # V28: FLOPS warmup
+        self.flops_warmup_steps = flops_warmup_steps
+        self.target_lambda_flops = lambda_flops
 
         # V28: Language filtering
         self.enable_language_filtering = enable_language_filtering
@@ -1889,6 +1894,13 @@ class SPLADELossV28(SPLADELossV26):
         ratio = self._global_step / max(self.language_warmup_steps, 1)
         return self.language_penalty_max * ratio
 
+    def _get_effective_lambda_flops(self) -> float:
+        """Get warmup-scaled FLOPS regularization weight."""
+        if self.flops_warmup_steps <= 0 or self._global_step >= self.flops_warmup_steps:
+            return self.target_lambda_flops
+        ratio = self._global_step / max(self.flops_warmup_steps, 1)
+        return self.target_lambda_flops * ratio
+
     def _check_collapse(self, flops: float) -> None:
         """Check for training collapse and auto-reduce penalty."""
         if flops < self.collapse_flops_threshold:
@@ -1905,6 +1917,17 @@ class SPLADELossV28(SPLADELossV26):
                 f"Collapse detected! Halving language_penalty_max "
                 f"to {self.language_penalty_max:.6f} "
                 f"(halving #{self._collapse_halvings})"
+            )
+
+    def _check_sparsity(self, active_tokens: float) -> None:
+        """Check if model is producing too many active tokens."""
+        if active_tokens > 1000 and self._global_step > self.flops_warmup_steps:
+            # Model is not sparse enough even after warmup
+            self.target_lambda_flops *= 1.5
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Insufficient sparsity (active_tokens={active_tokens:.0f})! "
+                f"Increasing target_lambda_flops to {self.target_lambda_flops:.4f}"
             )
 
     def set_global_step(self, step: int) -> None:
@@ -1942,6 +1965,24 @@ class SPLADELossV28(SPLADELossV26):
             positive_texts=positive_texts,
             teacher_scores=teacher_scores,
         )
+
+        # V28: FLOPS warmup correction
+        # The base V26 used self.lambda_flops for FLOPS. We correct it here.
+        if self.flops_warmup_steps > 0:
+            effective_flops_lambda = self._get_effective_lambda_flops()
+            flops_val = loss_dict.get("flops", 0.0)
+            # Remove old FLOPS contribution and add new one
+            old_flops_contrib = self.lambda_flops * flops_val
+            new_flops_contrib = effective_flops_lambda * flops_val
+            total_loss = total_loss + (new_flops_contrib - old_flops_contrib)
+            loss_dict["effective_lambda_flops"] = effective_flops_lambda
+
+        # Sparsity monitoring
+        with torch.no_grad():
+            active_tokens = (anchor_repr > 0.01).float().sum(dim=-1).mean().item()
+            loss_dict["active_tokens"] = active_tokens
+
+        self._check_sparsity(active_tokens)
 
         # V28: Add language filtering with warmup
         if self.enable_language_filtering and self.non_korean_mask is not None:
