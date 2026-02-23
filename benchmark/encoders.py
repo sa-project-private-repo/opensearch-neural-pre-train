@@ -340,10 +340,6 @@ class NeuralSparseEncoderV28:
         self.doc_max_length = doc_max_length or max_length
         checkpoint_path = Path(checkpoint_path)
 
-        logger.warning(
-            "V28 model training collapsed - it produces near-zero vectors. "
-            "Use V26 (NeuralSparseEncoder) for benchmarking instead."
-        )
         logger.info(f"Loading V28 neural sparse model from: {checkpoint_path}")
 
         # Load tokenizer from base model

@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from tqdm import tqdm
 
 from benchmark.config import BenchmarkConfig
-from benchmark.encoders import create_encoders, create_encoders_v29, create_encoders_v30
+from benchmark.encoders import create_encoders, create_encoders_v28, create_encoders_v29, create_encoders_v30
 from benchmark.hf_data_loader import MTEBBenchmarkData, load_hf_dataset
 from benchmark.index_manager import IndexManager
 from benchmark.metrics import BenchmarkMetrics, QueryResult, compute_metrics, paired_t_test
@@ -50,7 +50,10 @@ class HFBenchmarkRunner:
 
         # Load encoders
         logger.info("Loading encoders...")
-        self.dense_encoder, self.sparse_encoder = create_encoders_v30(self.config)
+        self.dense_encoder, self.sparse_encoder = create_encoders_v28(
+            self.config,
+            checkpoint_path="outputs/train_v28_ddp/checkpoint_epoch30_step63180/model.pt",
+        )
 
         # Load HuggingFace dataset
         logger.info(f"Loading {self.dataset_name} dataset...")
