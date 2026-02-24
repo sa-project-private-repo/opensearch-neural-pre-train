@@ -201,9 +201,7 @@ def create_model(config: V28Config, device: torch.device) -> nn.Module:
 
 
 def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Module:
-    """Create V28 loss function with fixed parameters."""
-    from src.model.losses import SPLADELossV28
-
+    """Create loss function (V29 with separate query/doc FLOPS, or V28 fallback)."""
     # Get special token IDs
     special_token_ids = get_special_token_ids_only(tokenizer)
 
@@ -220,7 +218,6 @@ def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Mod
             logger.info(f"Loaded Korean token IDs: {len(korean_token_ids):,}")
 
     # Load IDF weights
-
     idf_cache_path = config.get_idf_cache_path()
     idf_weights = load_or_compute_idf(
         cache_path=idf_cache_path,
@@ -234,26 +231,65 @@ def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Mod
     if config.loss.use_stopword_mask:
         stopword_mask = create_stopword_mask_v26(tokenizer)
 
-    loss_fn = SPLADELossV28(
-        idf_weights=idf_weights,
-        special_token_ids=special_token_ids,
-        korean_token_ids=korean_token_ids,
-        lambda_language=config.loss.lambda_language,
-        non_korean_penalty=config.loss.non_korean_penalty,
-        korean_penalty=config.loss.korean_token_penalty,
-        enable_language_filtering=config.loss.enable_language_filtering,
-        lambda_infonce=config.loss.lambda_infonce,
-        lambda_self=config.loss.lambda_self,
-        lambda_positive=config.loss.lambda_positive,
-        lambda_flops=config.loss.lambda_flops,
-        lambda_min_act=config.loss.lambda_min_act,
-        temperature=config.loss.temperature,
-        top_k=config.loss.top_k,
-        min_activation=config.loss.min_activation,
-        stopword_mask=stopword_mask,
-        stopword_penalty=config.loss.stopword_penalty,
-        flops_warmup_steps=getattr(config.loss, 'flops_warmup_steps', 0),
-    )
+    # Use V29 (SPLADE v2 separate FLOPS) if lambda_flops_q/d are set
+    lambda_flops_q = getattr(config.loss, 'lambda_flops_q', 0.0)
+    lambda_flops_d = getattr(config.loss, 'lambda_flops_d', 0.0)
+
+    if lambda_flops_q > 0 or lambda_flops_d > 0:
+        from src.model.losses import SPLADELossV29
+
+        loss_fn = SPLADELossV29(
+            idf_weights=idf_weights,
+            special_token_ids=special_token_ids,
+            lambda_flops_q=lambda_flops_q,
+            lambda_flops_d=lambda_flops_d,
+            korean_token_ids=korean_token_ids,
+            lambda_language=config.loss.lambda_language,
+            non_korean_penalty=config.loss.non_korean_penalty,
+            korean_penalty=config.loss.korean_token_penalty,
+            enable_language_filtering=config.loss.enable_language_filtering,
+            lambda_infonce=config.loss.lambda_infonce,
+            lambda_self=config.loss.lambda_self,
+            lambda_positive=config.loss.lambda_positive,
+            lambda_flops=config.loss.lambda_flops,  # 0.0 (unified disabled)
+            lambda_min_act=config.loss.lambda_min_act,
+            lambda_kd=getattr(config.loss, 'lambda_kd', 2.0),
+            temperature=config.loss.temperature,
+            top_k=config.loss.top_k,
+            min_activation=config.loss.min_activation,
+            stopword_mask=stopword_mask,
+            stopword_penalty=config.loss.stopword_penalty,
+        )
+        if is_main_process():
+            logger.info(
+                f"Using SPLADELossV29 (SPLADE v2): "
+                f"lambda_flops_q={lambda_flops_q}, lambda_flops_d={lambda_flops_d}"
+            )
+    else:
+        from src.model.losses import SPLADELossV28
+
+        loss_fn = SPLADELossV28(
+            idf_weights=idf_weights,
+            special_token_ids=special_token_ids,
+            korean_token_ids=korean_token_ids,
+            lambda_language=config.loss.lambda_language,
+            non_korean_penalty=config.loss.non_korean_penalty,
+            korean_penalty=config.loss.korean_token_penalty,
+            enable_language_filtering=config.loss.enable_language_filtering,
+            lambda_infonce=config.loss.lambda_infonce,
+            lambda_self=config.loss.lambda_self,
+            lambda_positive=config.loss.lambda_positive,
+            lambda_flops=config.loss.lambda_flops,
+            lambda_min_act=config.loss.lambda_min_act,
+            temperature=config.loss.temperature,
+            top_k=config.loss.top_k,
+            min_activation=config.loss.min_activation,
+            stopword_mask=stopword_mask,
+            stopword_penalty=config.loss.stopword_penalty,
+            flops_warmup_steps=getattr(config.loss, 'flops_warmup_steps', 0),
+        )
+        if is_main_process():
+            logger.info(f"Using SPLADELossV28: lambda_flops={config.loss.lambda_flops}")
 
     return loss_fn.to(device)
 
@@ -390,11 +426,13 @@ def train_epoch(
                 semantic_ratio = loss_fn.get_average_semantic_ratio() if hasattr(loss_fn, 'get_average_semantic_ratio') else 0
                 korean_ratio = loss_fn.get_average_korean_ratio() if hasattr(loss_fn, 'get_average_korean_ratio') else 0
                 active_tokens = loss_dict.get("active_tokens", 0)
+                flops_q = loss_dict.get("flops_q", 0)
+                flops_d = loss_dict.get("flops_d", 0)
 
                 logger.info(
                     f"Step {global_step} - loss: {loss.item() * config.training.gradient_accumulation_steps:.4f}, "
                     f"lr: {lr:.2e}, semantic_ratio: {semantic_ratio:.4f}, korean_ratio: {korean_ratio:.4f}, "
-                    f"active_tokens: {active_tokens:.0f}"
+                    f"active_tokens: {active_tokens:.0f}, flops_q: {flops_q:.4f}, flops_d: {flops_d:.4f}"
                 )
 
                 if tb_logger:
@@ -403,6 +441,9 @@ def train_epoch(
                     tb_logger.log_scalar("train/semantic_ratio", semantic_ratio, global_step)
                     tb_logger.log_scalar("train/korean_ratio", korean_ratio, global_step)
                     tb_logger.log_scalar("train/active_tokens", active_tokens, global_step)
+                    if flops_q > 0:
+                        tb_logger.log_scalar("train/flops_q", flops_q, global_step)
+                        tb_logger.log_scalar("train/flops_d", flops_d, global_step)
 
         total_loss += loss.item() * config.training.gradient_accumulation_steps
         num_batches += 1

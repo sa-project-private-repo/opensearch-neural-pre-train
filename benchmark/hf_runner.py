@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 class HFBenchmarkRunner:
     """Runs benchmark on HuggingFace MTEB-style datasets."""
 
-    def __init__(self, config: BenchmarkConfig, dataset_name: str):
+    def __init__(self, config: BenchmarkConfig, dataset_name: str, checkpoint_path: Optional[str] = None):
         self.config = config
         self.dataset_name = dataset_name
+        self.checkpoint_path = checkpoint_path
         self.results: Dict[str, List[QueryResult]] = {}
         self.metrics: Dict[str, BenchmarkMetrics] = {}
 
@@ -49,10 +50,11 @@ class HFBenchmarkRunner:
         self.index_manager.create_all_indices()
 
         # Load encoders
-        logger.info("Loading encoders...")
+        ckpt = self.checkpoint_path or "outputs/train_v28_ddp/checkpoint_epoch30_step63180/model.pt"
+        logger.info(f"Loading encoders (checkpoint: {ckpt})...")
         self.dense_encoder, self.sparse_encoder = create_encoders_v28(
             self.config,
-            checkpoint_path="outputs/train_v28_ddp/checkpoint_epoch30_step63180/model.pt",
+            checkpoint_path=ckpt,
         )
 
         # Load HuggingFace dataset
@@ -335,6 +337,12 @@ def main():
         default="hf",
         help="Suffix for index names",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to model checkpoint (default: hardcoded V28 path)",
+    )
     args = parser.parse_args()
 
     # Create config with custom index names
@@ -345,7 +353,7 @@ def main():
     config.hybrid_index = f"benchmark-hybrid-{args.index_suffix}"
 
     # Create runner
-    runner = HFBenchmarkRunner(config, args.dataset)
+    runner = HFBenchmarkRunner(config, args.dataset, checkpoint_path=args.checkpoint)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1396,10 +1396,10 @@ logs-v28-ddp: ## Show DDP training logs (real-time)
 		echo "$(RED)No logs found. Start training first with: make train-v28-ddp$(NC)"; \
 	fi
 
-tensorboard-v28-ddp: ## Start TensorBoard for DDP training
+tensorboard-v28-ddp: ## Start TensorBoard for DDP training (all v28 runs)
 	@echo "$(BLUE)Starting TensorBoard...$(NC)"
 	@echo "URL: http://localhost:6006"
-	@$(VENV)/bin/tensorboard --logdir $(OUTPUT_V28_DDP)/tensorboard --port 6006
+	@$(VENV)/bin/tensorboard --logdir outputs/train_v28_ddp_v3/tensorboard --port 6006 --reload_interval 30
 
 ##@ V28 DDP Full Pipeline
 

@@ -63,6 +63,13 @@ class V28LossConfig(V26LossConfig):
     flops_warmup_steps: int = 0
     """Steps to linearly warmup FLOPS penalty from 0 to lambda_flops."""
 
+    # V29: Separate FLOPS regularization (SPLADE v2 style)
+    lambda_flops_q: float = 0.0
+    """FLOPS regularization weight for queries (SPLADE v2). 0=disabled."""
+
+    lambda_flops_d: float = 0.0
+    """FLOPS regularization weight for documents (SPLADE v2). 0=disabled."""
+
     # ===== V28b: Context-Gated Expansion =====
     use_context_gate: bool = True
     """Enable context-gated sparse expansion."""
