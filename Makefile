@@ -18,6 +18,7 @@
 	info compute-idf-rust collect-v29-data build-v29-data v29-data-stats mine-hard-negatives \
 	train-v28-ddp train-v28-ddp-bg train-v28-ddp-resume logs-v28-ddp tensorboard-v28-ddp \
 	v29-pipeline-bg benchmark-ko-strategyqa lint format clean-cache \
+	upload-data download-data upload-outputs download-outputs \
 	prepare-mlm-data pretrain-mlm pretrain-mlm-bg logs-mlm mlm-pipeline \
 	finetune-doc2query finetune-doc2query-bg expand-documents expand-documents-bg \
 	logs-doc2query doc2query-pipeline
@@ -1447,4 +1448,43 @@ lint: ## Run code quality checks
 format: ## Format code with black
 	@$(PYTHON) -m black src/
 	@echo "$(GREEN)OK Code formatted$(NC)"
+
+##@ S3 Data Sync
+
+S3_BUCKET := s3://bedrock-base-database-data-source
+S3_PREFIX := opensearch-neural-pre-train
+S3_DATA_KEY := $(S3_PREFIX)/data.tar.gz
+S3_OUTPUTS_KEY := $(S3_PREFIX)/outputs.tar.gz
+
+upload-data: ## Compress and upload data/ to S3
+	@echo "$(BLUE)Compressing data/...$(NC)"
+	@tar czf /tmp/neural-pretrain-data.tar.gz data/
+	@echo "$(BLUE)Uploading to $(S3_BUCKET)/$(S3_DATA_KEY)...$(NC)"
+	@aws s3 cp /tmp/neural-pretrain-data.tar.gz $(S3_BUCKET)/$(S3_DATA_KEY)
+	@rm -f /tmp/neural-pretrain-data.tar.gz
+	@echo "$(GREEN)OK data/ uploaded to S3$(NC)"
+
+download-data: ## Download and extract data/ from S3
+	@echo "$(BLUE)Downloading from $(S3_BUCKET)/$(S3_DATA_KEY)...$(NC)"
+	@aws s3 cp $(S3_BUCKET)/$(S3_DATA_KEY) /tmp/neural-pretrain-data.tar.gz
+	@echo "$(BLUE)Extracting data/...$(NC)"
+	@tar xzf /tmp/neural-pretrain-data.tar.gz
+	@rm -f /tmp/neural-pretrain-data.tar.gz
+	@echo "$(GREEN)OK data/ downloaded and extracted$(NC)"
+
+upload-outputs: ## Compress and upload outputs/ to S3
+	@echo "$(BLUE)Compressing outputs/...$(NC)"
+	@tar czf /tmp/neural-pretrain-outputs.tar.gz outputs/
+	@echo "$(BLUE)Uploading to $(S3_BUCKET)/$(S3_OUTPUTS_KEY)...$(NC)"
+	@aws s3 cp /tmp/neural-pretrain-outputs.tar.gz $(S3_BUCKET)/$(S3_OUTPUTS_KEY)
+	@rm -f /tmp/neural-pretrain-outputs.tar.gz
+	@echo "$(GREEN)OK outputs/ uploaded to S3$(NC)"
+
+download-outputs: ## Download and extract outputs/ from S3
+	@echo "$(BLUE)Downloading from $(S3_BUCKET)/$(S3_OUTPUTS_KEY)...$(NC)"
+	@aws s3 cp $(S3_BUCKET)/$(S3_OUTPUTS_KEY) /tmp/neural-pretrain-outputs.tar.gz
+	@echo "$(BLUE)Extracting outputs/...$(NC)"
+	@tar xzf /tmp/neural-pretrain-outputs.tar.gz
+	@rm -f /tmp/neural-pretrain-outputs.tar.gz
+	@echo "$(GREEN)OK outputs/ downloaded and extracted$(NC)"
 
