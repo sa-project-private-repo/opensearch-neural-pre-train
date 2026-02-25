@@ -1243,26 +1243,47 @@ class SPLADELossV25(nn.Module):
             total_loss: Combined loss value
             loss_dict: Dictionary with individual loss components
         """
-        # Apply stopword mask to representations if available
+        # Apply stopword mask to ALL representations (Issue #22)
+        # Previously only applied to anchor for InfoNCE, causing 8000x
+        # force imbalance where self/positive losses promoted particles
         masked_anchor = anchor_repr
+        masked_positive = positive_repr
+        masked_negative = negative_repr
         if self.stopword_mask is not None:
             masked_anchor = anchor_repr * self.stopword_mask
+            masked_positive = positive_repr * self.stopword_mask
+            masked_negative = negative_repr * self.stopword_mask
 
-        # Compute individual losses
-        loss_infonce = self.infonce_loss(masked_anchor, positive_repr, negative_repr)
+        # IDF-weighted scoring for InfoNCE (Issue #23: paper Eq.5)
+        # High-IDF tokens contribute more to relevance signal
+        idf_anchor = masked_anchor
+        idf_positive = masked_positive
+        idf_negative = masked_negative
+        if hasattr(self, "idf_scoring_weights"):
+            w = self.idf_scoring_weights  # [vocab_size], sqrt(normalized IDF)
+            idf_anchor = masked_anchor * w
+            idf_positive = masked_positive * w
+            idf_negative = masked_negative * w
+
+        # Compute individual losses (all use masked representations)
+        loss_infonce = self.infonce_loss(
+            idf_anchor, idf_positive, idf_negative
+        )
 
         loss_self = self.self_loss(
-            anchor_repr, anchor_input_ids, anchor_attention_mask
+            masked_anchor, anchor_input_ids, anchor_attention_mask
         )
 
         loss_positive = self.positive_loss(
-            anchor_repr, positive_input_ids, positive_attention_mask
+            masked_anchor, positive_input_ids, positive_attention_mask
         )
 
-        loss_margin = self.margin_loss(anchor_repr, positive_repr, negative_repr)
+        loss_margin = self.margin_loss(
+            masked_anchor, masked_positive, masked_negative
+        )
 
-        # IDF-aware FLOPS on unmasked repr (penalty handles stopwords)
-        loss_flops = self.flops_loss(anchor_repr)
+        # IDF-aware FLOPS on masked repr
+        loss_flops = self.flops_loss(masked_anchor)
 
         loss_min_act = self.min_act_loss(masked_anchor)
 
@@ -1270,7 +1291,7 @@ class SPLADELossV25(nn.Module):
         loss_kd = torch.tensor(0.0, device=anchor_repr.device)
         if self.lambda_kd > 0 and (teacher_scores is not None or self.teacher_model):
             anchor_norm = F.normalize(masked_anchor, p=2, dim=-1)
-            positive_norm = F.normalize(positive_repr, p=2, dim=-1)
+            positive_norm = F.normalize(masked_positive, p=2, dim=-1)
             student_scores = torch.mm(anchor_norm, positive_norm.t())
 
             if teacher_scores is None and self.teacher_model is not None:
@@ -1472,6 +1493,14 @@ class SPLADELossV26(nn.Module):
         # Store special token IDs for reference
         self.special_token_ids = special_token_ids
 
+        # Store IDF weights for scoring (Issue #23: paper Eq.5)
+        # Normalize IDF to [0, 1] range, then sqrt for symmetric weighting
+        idf_min = idf_weights.min()
+        idf_max = idf_weights.max()
+        idf_normalized = (idf_weights - idf_min) / (idf_max - idf_min + 1e-8)
+        idf_scoring_weights = torch.sqrt(idf_normalized.clamp(min=0.01))
+        self.register_buffer("idf_scoring_weights", idf_scoring_weights)
+
         # Individual loss modules
         self.infonce_loss = InfoNCELoss(temperature=temperature)
         self.self_loss = SelfReconstructionLoss()
@@ -1562,26 +1591,47 @@ class SPLADELossV26(nn.Module):
             total_loss: Combined loss value
             loss_dict: Dictionary with individual loss components
         """
-        # Apply stopword mask to representations if available
+        # Apply stopword mask to ALL representations (Issue #22)
+        # Previously only applied to anchor for InfoNCE, causing 8000x
+        # force imbalance where self/positive losses promoted particles
         masked_anchor = anchor_repr
+        masked_positive = positive_repr
+        masked_negative = negative_repr
         if self.stopword_mask is not None:
             masked_anchor = anchor_repr * self.stopword_mask
+            masked_positive = positive_repr * self.stopword_mask
+            masked_negative = negative_repr * self.stopword_mask
 
-        # Compute individual losses
-        loss_infonce = self.infonce_loss(masked_anchor, positive_repr, negative_repr)
+        # IDF-weighted scoring for InfoNCE (Issue #23: paper Eq.5)
+        # High-IDF tokens contribute more to relevance signal
+        idf_anchor = masked_anchor
+        idf_positive = masked_positive
+        idf_negative = masked_negative
+        if hasattr(self, "idf_scoring_weights"):
+            w = self.idf_scoring_weights  # [vocab_size], sqrt(normalized IDF)
+            idf_anchor = masked_anchor * w
+            idf_positive = masked_positive * w
+            idf_negative = masked_negative * w
+
+        # Compute individual losses (all use masked representations)
+        loss_infonce = self.infonce_loss(
+            idf_anchor, idf_positive, idf_negative
+        )
 
         loss_self = self.self_loss(
-            anchor_repr, anchor_input_ids, anchor_attention_mask
+            masked_anchor, anchor_input_ids, anchor_attention_mask
         )
 
         loss_positive = self.positive_loss(
-            anchor_repr, positive_input_ids, positive_attention_mask
+            masked_anchor, positive_input_ids, positive_attention_mask
         )
 
-        loss_margin = self.margin_loss(anchor_repr, positive_repr, negative_repr)
+        loss_margin = self.margin_loss(
+            masked_anchor, masked_positive, masked_negative
+        )
 
-        # IDF-aware FLOPS on unmasked repr (penalty handles stopwords)
-        loss_flops = self.flops_loss(anchor_repr)
+        # IDF-aware FLOPS on masked repr
+        loss_flops = self.flops_loss(masked_anchor)
 
         loss_min_act = self.min_act_loss(masked_anchor)
 
@@ -1589,7 +1639,7 @@ class SPLADELossV26(nn.Module):
         loss_kd = torch.tensor(0.0, device=anchor_repr.device)
         if self.lambda_kd > 0 and (teacher_scores is not None or self.teacher_model):
             anchor_norm = F.normalize(masked_anchor, p=2, dim=-1)
-            positive_norm = F.normalize(positive_repr, p=2, dim=-1)
+            positive_norm = F.normalize(masked_positive, p=2, dim=-1)
             student_scores = torch.mm(anchor_norm, positive_norm.t())
 
             if teacher_scores is None and self.teacher_model is not None:
@@ -2125,13 +2175,17 @@ class SPLADELossV29(SPLADELossV28):
 
     def _compute_flops_v29(self, sparse_repr: torch.Tensor) -> torch.Tensor:
         """
-        Compute SPLADE v2 style FLOPS regularization (unweighted).
+        Compute IDF-weighted FLOPS regularization (Issue #21).
 
-        L_FLOPS = sum_j (mean_activation_j)^2
+        L_FLOPS = sum_j (w_j * mean_activation_j^2)
 
-        Unweighted to avoid IDF bias that causes rare foreign tokens
-        to be activated. Language filtering is handled separately by
-        V28 language loss component.
+        Uses V26 IDFAwareFLOPSLoss penalty_weights which include:
+        - IDF-based weights: exp(-alpha * normalized_idf)
+        - Stopword penalty: 15x for known stopwords
+        - Special token penalty: 100x for <s>, </s>
+
+        This ensures Korean particles (low IDF) get 15x+ higher
+        FLOPS penalty than semantic content tokens (high IDF).
 
         Args:
             sparse_repr: Sparse representations [batch_size, vocab_size]
@@ -2142,8 +2196,9 @@ class SPLADELossV29(SPLADELossV28):
         # Average activation per token across batch
         mean_activation = sparse_repr.mean(dim=0)  # [vocab_size]
 
-        # Sum of squared mean activations (unweighted SPLADE v2)
-        flops_loss = (mean_activation ** 2).sum()
+        # IDF-weighted FLOPS: stopwords penalized 15x more
+        penalty_weights = self.flops_loss.penalty_weights  # [vocab_size]
+        flops_loss = (penalty_weights * (mean_activation ** 2)).sum()
 
         return flops_loss
 
@@ -2225,9 +2280,16 @@ class SPLADELossV29(SPLADELossV28):
             teacher_scores=teacher_scores if not self.use_margin_mse else None,
         )
 
-        # V29: Separate FLOPS for query and document
-        flops_q = self._compute_flops_v29(anchor_repr)
-        flops_d = self._compute_flops_v29(positive_repr) + self._compute_flops_v29(negative_repr)
+        # V29: Separate FLOPS for query and document (masked, Issue #22)
+        masked_q = anchor_repr
+        masked_p = positive_repr
+        masked_n = negative_repr
+        if self.stopword_mask is not None:
+            masked_q = anchor_repr * self.stopword_mask
+            masked_p = positive_repr * self.stopword_mask
+            masked_n = negative_repr * self.stopword_mask
+        flops_q = self._compute_flops_v29(masked_q)
+        flops_d = self._compute_flops_v29(masked_p) + self._compute_flops_v29(masked_n)
 
         flops_loss = self.lambda_flops_q * flops_q + self.lambda_flops_d * flops_d
         total_loss = total_loss + flops_loss

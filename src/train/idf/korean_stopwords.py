@@ -431,3 +431,83 @@ def create_stopword_penalty_weights(
     )
 
     return weights
+
+
+def expand_stopwords_by_idf(
+    tokenizer: PreTrainedTokenizer,
+    idf_weights: torch.Tensor,
+    top_n: int = 500,
+    idf_percentile: float = 0.15,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """
+    Create expanded stopword mask using IDF weights (Issue #24).
+
+    Identifies low-IDF subword tokens that are likely particles/function
+    words even if not in the hand-crafted stopword list. This catches
+    subword pieces like "에서", "▁의", "▁에" that dominate activations.
+
+    Strategy:
+    1. Start with V26 extended stopword list
+    2. Add top_n lowest-IDF tokens (excluding special tokens)
+    3. Cap at idf_percentile of IDF range
+
+    Args:
+        tokenizer: HuggingFace tokenizer
+        idf_weights: Pre-computed IDF weights [vocab_size]
+        top_n: Max additional tokens to add
+        idf_percentile: IDF threshold (tokens below this are stopwords)
+        device: Target device
+
+    Returns:
+        Binary mask tensor [vocab_size] (1=keep, 0=mask)
+    """
+    vocab_size = tokenizer.vocab_size
+    mask = torch.ones(vocab_size, device=device)
+
+    # Start with V26 stopwords
+    base_stopword_ids = get_korean_stopword_ids_v26(
+        tokenizer, include_subwords=True
+    )
+    special_ids = _get_special_token_ids(tokenizer)
+
+    # Mark base stopwords
+    for tid in base_stopword_ids:
+        if 0 <= tid < vocab_size:
+            mask[tid] = 0.0
+    for tid in special_ids:
+        if 0 <= tid < vocab_size:
+            mask[tid] = 0.0
+
+    # Compute IDF threshold
+    real_mask = torch.ones(len(idf_weights), dtype=torch.bool)
+    for tid in special_ids:
+        if 0 <= tid < len(idf_weights):
+            real_mask[tid] = False
+    real_idf = idf_weights[real_mask]
+    idf_threshold = torch.quantile(real_idf.float(), idf_percentile)
+
+    # Find low-IDF tokens not already masked
+    candidates = []
+    for tid in range(vocab_size):
+        if tid in special_ids or tid in base_stopword_ids:
+            continue
+        if idf_weights[tid] < idf_threshold:
+            candidates.append((tid, idf_weights[tid].item()))
+
+    # Sort by IDF (lowest first) and take top_n
+    candidates.sort(key=lambda x: x[1])
+    added = 0
+    for tid, idf_val in candidates[:top_n]:
+        mask[tid] = 0.0
+        added += 1
+
+    total_masked = int((mask == 0).sum().item())
+    logger.info(
+        f"Expanded stopword mask: {len(base_stopword_ids)} base + "
+        f"{len(special_ids)} special + {added} IDF-based = "
+        f"{total_masked} total masked tokens "
+        f"(IDF threshold={idf_threshold:.4f})"
+    )
+
+    return mask

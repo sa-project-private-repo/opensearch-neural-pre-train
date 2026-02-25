@@ -12,6 +12,7 @@ from .idf_computer import IDFComputer, compute_idf_from_corpus, load_or_compute_
 from .korean_stopwords import (
     create_stopword_mask,
     create_stopword_mask_v26,
+    expand_stopwords_by_idf,
     get_korean_stopword_ids,
     get_korean_stopword_ids_v26,
     get_special_token_ids_only,
@@ -39,6 +40,7 @@ __all__ = [
     "KOREAN_STOPWORDS",
     # V26 enhanced stopword handling
     "create_stopword_mask_v26",
+    "expand_stopwords_by_idf",
     "get_korean_stopword_ids_v26",
     "get_special_token_ids_only",
     "KOREAN_STOPWORDS_V26",

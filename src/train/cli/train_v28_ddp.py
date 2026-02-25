@@ -40,7 +40,12 @@ from src.train.core.checkpoint import CheckpointManager
 from src.train.data import load_training_data
 from src.train.data.collator import create_tokenizer
 from src.train.data.dataloader import TripletCollator
-from src.train.idf import load_or_compute_idf, create_stopword_mask_v26, get_special_token_ids_only
+from src.train.idf import (
+    load_or_compute_idf,
+    create_stopword_mask_v26,
+    expand_stopwords_by_idf,
+    get_special_token_ids_only,
+)
 from src.train.idf.korean_tokens import load_or_compute_korean_tokens
 from src.train.utils import TensorBoardLogger, setup_logging
 
@@ -226,10 +231,15 @@ def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Mod
         recompute=False,
     )
 
-    # Create stopword mask
+    # Create stopword mask (IDF-expanded, Issue #24)
     stopword_mask = None
     if config.loss.use_stopword_mask:
-        stopword_mask = create_stopword_mask_v26(tokenizer)
+        stopword_mask = expand_stopwords_by_idf(
+            tokenizer=tokenizer,
+            idf_weights=idf_weights,
+            top_n=500,
+            idf_percentile=0.15,
+        )
 
     # Use V29 (SPLADE v2 separate FLOPS) if lambda_flops_q/d are set
     lambda_flops_q = getattr(config.loss, 'lambda_flops_q', 0.0)
