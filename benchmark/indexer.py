@@ -112,16 +112,34 @@ def bulk_actions_dense(
 def bulk_actions_sparse(
     docs: List[EncodedDocument],
     index_name: str,
+    tokenizer=None,
 ) -> Iterator[Dict]:
-    """Generate bulk index actions for sparse index."""
+    """Generate bulk index actions for sparse index.
+
+    sparse_vector type requires integer token IDs as keys.
+    Converts token strings to IDs using the tokenizer vocab.
+    """
+    # Build token-to-id lookup if tokenizer provided
+    token_to_id: Optional[Dict[str, int]] = None
+    if tokenizer is not None:
+        token_to_id = tokenizer.get_vocab()
+
     for doc in docs:
+        sparse = doc.sparse_embedding
+        if token_to_id is not None:
+            # Convert string token keys to integer IDs
+            sparse = {}
+            for token, weight in doc.sparse_embedding.items():
+                tid = token_to_id.get(token)
+                if tid is not None:
+                    sparse[str(tid)] = weight
         yield {
             "_index": index_name,
             "_id": doc.doc_id,
             "_source": {
                 "doc_id": doc.doc_id,
                 "content": doc.content,
-                "sparse_embedding": doc.sparse_embedding,
+                "sparse_embedding": sparse,
             },
         }
 
@@ -148,6 +166,7 @@ def index_documents(
     encoded_docs: List[EncodedDocument],
     config: BenchmarkConfig,
     chunk_size: int = 100,
+    tokenizer=None,
 ) -> Dict[str, int]:
     """
     Index documents to all benchmark indices.
@@ -157,6 +176,7 @@ def index_documents(
         encoded_docs: Encoded documents
         config: Benchmark configuration
         chunk_size: Bulk indexing chunk size
+        tokenizer: Tokenizer for converting token strings to IDs (sparse_vector)
 
     Returns:
         Dict with document counts per index
@@ -180,9 +200,11 @@ def index_documents(
     counts[config.dense_index] = success
     index_manager.refresh_index(config.dense_index)
 
-    # Sparse index
+    # Sparse index (token strings -> integer IDs for sparse_vector)
     logger.info(f"Indexing to {config.sparse_index}...")
-    actions = list(bulk_actions_sparse(encoded_docs, config.sparse_index))
+    actions = list(bulk_actions_sparse(
+        encoded_docs, config.sparse_index, tokenizer=tokenizer
+    ))
     success, _ = bulk(client, actions, chunk_size=chunk_size)
     counts[config.sparse_index] = success
     index_manager.refresh_index(config.sparse_index)

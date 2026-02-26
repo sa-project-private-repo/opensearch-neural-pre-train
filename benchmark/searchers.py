@@ -140,6 +140,17 @@ class NeuralSparseSearcher(BaseSearcher):
         """Initialize neural sparse searcher with encoder."""
         super().__init__(client, index_name, top_k)
         self.encoder = encoder
+        # Build token-to-id lookup for sparse_vector integer keys
+        self._token_to_id = encoder.tokenizer.get_vocab()
+
+    def _to_int_keys(self, sparse: dict) -> dict:
+        """Convert token string keys to integer ID keys for sparse_vector."""
+        result = {}
+        for token, weight in sparse.items():
+            tid = self._token_to_id.get(token)
+            if tid is not None:
+                result[str(tid)] = weight
+        return result
 
     def search(self, query: str) -> SearchResponse:
         """Search using neural sparse vectors with native neural_sparse query."""
@@ -147,8 +158,10 @@ class NeuralSparseSearcher(BaseSearcher):
         query_sparse = self.encoder.encode_for_query(query, top_k=64)
 
         if not query_sparse:
-            # Empty query, return empty results
             return SearchResponse(results=[], latency_ms=0, total_hits=0)
+
+        # Convert to integer token IDs for sparse_vector field type
+        query_tokens = self._to_int_keys(query_sparse)
 
         # Use OpenSearch native neural_sparse query with pre-encoded tokens
         body = {
@@ -156,7 +169,7 @@ class NeuralSparseSearcher(BaseSearcher):
             "query": {
                 "neural_sparse": {
                     "sparse_embedding": {
-                        "query_tokens": query_sparse,
+                        "query_tokens": query_tokens,
                     }
                 }
             },

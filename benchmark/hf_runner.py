@@ -95,9 +95,12 @@ class HFBenchmarkRunner:
                     )
                 )
 
-        # Index all documents
+        # Index all documents (pass tokenizer for sparse_vector int key conversion)
         from benchmark.indexer import index_documents
-        counts = index_documents(self.index_manager, encoded_docs, self.config)
+        tokenizer = getattr(self.sparse_encoder, 'tokenizer', None)
+        counts = index_documents(
+            self.index_manager, encoded_docs, self.config, tokenizer=tokenizer
+        )
         logger.info(f"Indexed documents: {counts}")
 
     def run_benchmark(

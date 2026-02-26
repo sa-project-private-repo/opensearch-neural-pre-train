@@ -152,8 +152,7 @@ class IndexManager:
         self.client.indices.create(index=index_name, body=body)
         logger.info(f"Created index: {index_name}")
 
-        # Apply two-phase search pipeline for faster neural sparse queries
-        self._create_and_apply_two_phase_pipeline(index_name)
+        # Note: two-phase pipeline is NOT compatible with SEISMIC engine
 
     def create_hybrid_index(self) -> None:
         """Create hybrid index with both text and dense vector."""
