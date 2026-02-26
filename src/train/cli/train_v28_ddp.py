@@ -625,8 +625,12 @@ def main():
     # Mid-training evaluator (rank 0 only)
     evaluator = None
     if is_main_process() and args.eval_every > 0:
+        val_file = "data/v30.0/val.jsonl"
+        if config.data.val_files:
+            val_file = config.data.val_files[0]
         evaluator = MidTrainingEvaluator(
             tokenizer=tokenizer,
+            val_file=val_file,
             max_queries=args.eval_max_queries,
             max_docs=args.eval_max_docs,
             device=str(device),
@@ -706,22 +710,28 @@ def main():
                 if semantic_ratio < 1.0:
                     logger.warning("WARNING: semantic_ratio < 1.0 - model may be collapsing!")
 
-            # Mid-training evaluation (rank 0 only)
+            # Save checkpoint BEFORE eval (so crash in eval doesn't lose progress)
+            if epoch % config.training.save_every_n_epochs == 0:
+                save_checkpoint(model, optimizer, scheduler, epoch, global_step, args.output_dir)
+
+            # Sync across processes before eval (all ranks must reach here)
+            dist.barrier()
+
+            # Mid-training evaluation (rank 0 only, non-fatal)
             if (
                 evaluator is not None
                 and epoch % args.eval_every == 0
             ):
-                eval_model = model.module  # unwrap DDP
-                eval_metrics = evaluator.evaluate(eval_model, epoch)
-                if tb_logger:
-                    for key, val in eval_metrics.items():
-                        tb_logger.log_scalar(key, val, global_step)
+                try:
+                    eval_model = model.module  # unwrap DDP
+                    eval_metrics = evaluator.evaluate(eval_model, epoch)
+                    if tb_logger:
+                        for key, val in eval_metrics.items():
+                            tb_logger.log_scalar(key, val, global_step)
+                except Exception as e:
+                    logger.error(f"Mid-training eval failed: {e}")
 
-            # Save checkpoint
-            if epoch % config.training.save_every_n_epochs == 0:
-                save_checkpoint(model, optimizer, scheduler, epoch, global_step, args.output_dir)
-
-            # Sync across processes
+            # Sync after eval
             dist.barrier()
 
         # Final checkpoint

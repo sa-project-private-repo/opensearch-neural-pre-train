@@ -104,7 +104,7 @@ training:
   output_dir: "outputs/train_v32_ddp"
   experiment_name: "splade_v32_b200_x8"
   log_every_n_steps: 50
-  save_every_n_epochs: 5
+  save_every_n_epochs: 3
   save_every_n_steps: null
   keep_last_n_checkpoints: 3
 
