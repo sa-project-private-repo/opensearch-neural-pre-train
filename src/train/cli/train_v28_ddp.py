@@ -47,6 +47,7 @@ from src.train.idf import (
     get_special_token_ids_only,
 )
 from src.train.idf.korean_tokens import load_or_compute_korean_tokens
+from src.train.eval import MidTrainingEvaluator
 from src.train.utils import TensorBoardLogger, setup_logging
 
 
@@ -81,6 +82,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--debug", action="store_true", help="Debug mode")
+
+    # Mid-training evaluation
+    parser.add_argument("--eval-every", type=int, default=5,
+                        help="Run mid-training eval every N epochs (0=disabled)")
+    parser.add_argument("--eval-max-queries", type=int, default=100,
+                        help="Max queries for mid-training eval")
+    parser.add_argument("--eval-max-docs", type=int, default=2000,
+                        help="Max docs for mid-training eval")
 
     return parser.parse_args()
 
@@ -237,7 +246,7 @@ def create_loss_fn(config: V28Config, tokenizer, device: torch.device) -> nn.Mod
         stopword_mask = expand_stopwords_by_idf(
             tokenizer=tokenizer,
             idf_weights=idf_weights,
-            top_n=500,
+            top_n=200,  # V32: reduced from 500 (too aggressive in V31)
             idf_percentile=0.15,
         )
 
@@ -613,6 +622,21 @@ def main():
             experiment_name=config.training.experiment_name,
         )
 
+    # Mid-training evaluator (rank 0 only)
+    evaluator = None
+    if is_main_process() and args.eval_every > 0:
+        evaluator = MidTrainingEvaluator(
+            tokenizer=tokenizer,
+            max_queries=args.eval_max_queries,
+            max_docs=args.eval_max_docs,
+            device=str(device),
+            query_max_length=config.data.query_max_length or 64,
+            doc_max_length=config.data.doc_max_length or 256,
+        )
+        logger.info(
+            f"Mid-training eval enabled: every {args.eval_every} epochs"
+        )
+
     # Resume from checkpoint
     start_epoch = 1
     global_step = 0
@@ -681,6 +705,17 @@ def main():
                 # Warning if collapsing
                 if semantic_ratio < 1.0:
                     logger.warning("WARNING: semantic_ratio < 1.0 - model may be collapsing!")
+
+            # Mid-training evaluation (rank 0 only)
+            if (
+                evaluator is not None
+                and epoch % args.eval_every == 0
+            ):
+                eval_model = model.module  # unwrap DDP
+                eval_metrics = evaluator.evaluate(eval_model, epoch)
+                if tb_logger:
+                    for key, val in eval_metrics.items():
+                        tb_logger.log_scalar(key, val, global_step)
 
             # Save checkpoint
             if epoch % config.training.save_every_n_epochs == 0:

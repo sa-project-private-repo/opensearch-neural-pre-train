@@ -46,8 +46,8 @@ loss:
   lambda_margin: 0.0
   # SPLADE v2 style: separate query/doc FLOPS (unified disabled)
   lambda_flops: 0.0         # Disabled - use lambda_flops_q/d instead
-  lambda_flops_q: 3.0e-3    # Query FLOPS regularization (10x increase, Issue #25)
-  lambda_flops_d: 1.0e-2    # Document FLOPS regularization (10x increase, Issue #25)
+  lambda_flops_q: 3.0e-4    # Query FLOPS (V32: reverted from 3e-3, R1 IDF-weighting handles particle suppression)
+  lambda_flops_d: 1.0e-3    # Document FLOPS (V32: reverted from 1e-2)
   flops_warmup_steps: 0     # No warmup needed with small lambda values
   lambda_min_act: 5.0     # 5x increase to prevent collapse
   lambda_kd: 2.0
@@ -101,8 +101,8 @@ training:
   gradient_clip: 1.0
   gradient_accumulation_steps: 8   # effective = 32*8*8 = 2048
   mixed_precision: "bf16"
-  output_dir: "outputs/train_v31_ddp"
-  experiment_name: "splade_v28_b200_x8"
+  output_dir: "outputs/train_v32_ddp"
+  experiment_name: "splade_v32_b200_x8"
   log_every_n_steps: 50
   save_every_n_epochs: 5
   save_every_n_steps: null

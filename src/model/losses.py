@@ -1243,9 +1243,9 @@ class SPLADELossV25(nn.Module):
             total_loss: Combined loss value
             loss_dict: Dictionary with individual loss components
         """
-        # Apply stopword mask to ALL representations (Issue #22)
-        # Previously only applied to anchor for InfoNCE, causing 8000x
-        # force imbalance where self/positive losses promoted particles
+        # V32: Apply stopword mask ONLY to InfoNCE and FLOPS (not self/positive)
+        # R2 revision: self-reconstruction needs unmasked repr to learn
+        # which tokens to activate; masking everything caused V31 collapse
         masked_anchor = anchor_repr
         masked_positive = positive_repr
         masked_negative = negative_repr
@@ -1254,28 +1254,20 @@ class SPLADELossV25(nn.Module):
             masked_positive = positive_repr * self.stopword_mask
             masked_negative = negative_repr * self.stopword_mask
 
-        # IDF-weighted scoring for InfoNCE (Issue #23: paper Eq.5)
-        # High-IDF tokens contribute more to relevance signal
-        idf_anchor = masked_anchor
-        idf_positive = masked_positive
-        idf_negative = masked_negative
-        if hasattr(self, "idf_scoring_weights"):
-            w = self.idf_scoring_weights  # [vocab_size], sqrt(normalized IDF)
-            idf_anchor = masked_anchor * w
-            idf_positive = masked_positive * w
-            idf_negative = masked_negative * w
-
-        # Compute individual losses (all use masked representations)
+        # V32: InfoNCE uses masked repr directly (no IDF scoring weights)
+        # R3 revert: idf_scoring_weights double-penalized with IDF-FLOPS
         loss_infonce = self.infonce_loss(
-            idf_anchor, idf_positive, idf_negative
+            masked_anchor, masked_positive, masked_negative
         )
 
+        # Self-reconstruction and positive activation use RAW repr
+        # so the model can still learn to activate input tokens
         loss_self = self.self_loss(
-            masked_anchor, anchor_input_ids, anchor_attention_mask
+            anchor_repr, anchor_input_ids, anchor_attention_mask
         )
 
         loss_positive = self.positive_loss(
-            masked_anchor, positive_input_ids, positive_attention_mask
+            anchor_repr, positive_input_ids, positive_attention_mask
         )
 
         loss_margin = self.margin_loss(
@@ -1285,7 +1277,7 @@ class SPLADELossV25(nn.Module):
         # IDF-aware FLOPS on masked repr
         loss_flops = self.flops_loss(masked_anchor)
 
-        loss_min_act = self.min_act_loss(masked_anchor)
+        loss_min_act = self.min_act_loss(anchor_repr)
 
         # Knowledge distillation
         loss_kd = torch.tensor(0.0, device=anchor_repr.device)
@@ -1591,9 +1583,9 @@ class SPLADELossV26(nn.Module):
             total_loss: Combined loss value
             loss_dict: Dictionary with individual loss components
         """
-        # Apply stopword mask to ALL representations (Issue #22)
-        # Previously only applied to anchor for InfoNCE, causing 8000x
-        # force imbalance where self/positive losses promoted particles
+        # V32: Apply stopword mask ONLY to InfoNCE and FLOPS (not self/positive)
+        # R2 revision: self-reconstruction needs unmasked repr to learn
+        # which tokens to activate; masking everything caused V31 collapse
         masked_anchor = anchor_repr
         masked_positive = positive_repr
         masked_negative = negative_repr
@@ -1602,28 +1594,20 @@ class SPLADELossV26(nn.Module):
             masked_positive = positive_repr * self.stopword_mask
             masked_negative = negative_repr * self.stopword_mask
 
-        # IDF-weighted scoring for InfoNCE (Issue #23: paper Eq.5)
-        # High-IDF tokens contribute more to relevance signal
-        idf_anchor = masked_anchor
-        idf_positive = masked_positive
-        idf_negative = masked_negative
-        if hasattr(self, "idf_scoring_weights"):
-            w = self.idf_scoring_weights  # [vocab_size], sqrt(normalized IDF)
-            idf_anchor = masked_anchor * w
-            idf_positive = masked_positive * w
-            idf_negative = masked_negative * w
-
-        # Compute individual losses (all use masked representations)
+        # V32: InfoNCE uses masked repr directly (no IDF scoring weights)
+        # R3 revert: idf_scoring_weights double-penalized with IDF-FLOPS
         loss_infonce = self.infonce_loss(
-            idf_anchor, idf_positive, idf_negative
+            masked_anchor, masked_positive, masked_negative
         )
 
+        # Self-reconstruction and positive activation use RAW repr
+        # so the model can still learn to activate input tokens
         loss_self = self.self_loss(
-            masked_anchor, anchor_input_ids, anchor_attention_mask
+            anchor_repr, anchor_input_ids, anchor_attention_mask
         )
 
         loss_positive = self.positive_loss(
-            masked_anchor, positive_input_ids, positive_attention_mask
+            anchor_repr, positive_input_ids, positive_attention_mask
         )
 
         loss_margin = self.margin_loss(
@@ -1633,7 +1617,7 @@ class SPLADELossV26(nn.Module):
         # IDF-aware FLOPS on masked repr
         loss_flops = self.flops_loss(masked_anchor)
 
-        loss_min_act = self.min_act_loss(masked_anchor)
+        loss_min_act = self.min_act_loss(anchor_repr)
 
         # Knowledge distillation
         loss_kd = torch.tensor(0.0, device=anchor_repr.device)
