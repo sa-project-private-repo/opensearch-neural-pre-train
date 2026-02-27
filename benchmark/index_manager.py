@@ -126,6 +126,7 @@ class IndexManager:
             "settings": {
                 "index": {
                     "sparse": True,
+                    "mapping.total_fields.limit": 100000,
                 },
                 "number_of_shards": 6,
                 "number_of_replicas": 2,
