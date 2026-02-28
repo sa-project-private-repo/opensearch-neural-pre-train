@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from tqdm import tqdm
 
 from benchmark.config import BenchmarkConfig
-from benchmark.encoders import create_encoders, create_encoders_v28, create_encoders_v29, create_encoders_v30
+from benchmark.encoders import create_encoders, create_encoders_v28, create_encoders_v29, create_encoders_v30, create_encoders_v33
 from benchmark.hf_data_loader import MTEBBenchmarkData, load_hf_dataset
 from benchmark.index_manager import IndexManager
 from benchmark.metrics import BenchmarkMetrics, QueryResult, compute_metrics, paired_t_test
@@ -50,12 +50,26 @@ class HFBenchmarkRunner:
         self.index_manager.create_all_indices()
 
         # Load encoders
-        ckpt = self.checkpoint_path or "outputs/train_v28_ddp/checkpoint_epoch30_step63180/model.pt"
-        logger.info(f"Loading encoders (checkpoint: {ckpt})...")
-        self.dense_encoder, self.sparse_encoder = create_encoders_v28(
-            self.config,
-            checkpoint_path=ckpt,
-        )
+        ckpt = self.checkpoint_path
+        if ckpt and ("v33" in ckpt or "train_v33" in ckpt):
+            logger.info(f"Loading V33 encoders (checkpoint: {ckpt})...")
+            self.dense_encoder, self.sparse_encoder = create_encoders_v33(
+                self.config,
+                checkpoint_path=ckpt,
+            )
+        elif ckpt and ("v30" in ckpt or "train_v30" in ckpt):
+            logger.info(f"Loading V30 encoders (checkpoint: {ckpt})...")
+            self.dense_encoder, self.sparse_encoder = create_encoders_v30(
+                self.config,
+                checkpoint_path=ckpt,
+            )
+        else:
+            ckpt = ckpt or "outputs/train_v28_ddp/checkpoint_epoch30_step63180/model.pt"
+            logger.info(f"Loading V28 encoders (checkpoint: {ckpt})...")
+            self.dense_encoder, self.sparse_encoder = create_encoders_v28(
+                self.config,
+                checkpoint_path=ckpt,
+            )
 
         # Load HuggingFace dataset
         logger.info(f"Loading {self.dataset_name} dataset...")
@@ -345,6 +359,13 @@ def main():
         type=str,
         default=None,
         help="Path to model checkpoint (default: hardcoded V28 path)",
+    )
+    parser.add_argument(
+        "--model-version",
+        type=str,
+        default=None,
+        choices=["v28", "v29", "v30", "v33"],
+        help="Model version to use (auto-detected from checkpoint path if not specified)",
     )
     args = parser.parse_args()
 
