@@ -245,7 +245,7 @@ def load_checkpoint(
     scheduler,
     checkpoint_path: str,
 ) -> Dict:
-    """Load checkpoint."""
+    """Load checkpoint (supports both full checkpoints and model-only)."""
     ckpt_dir = Path(checkpoint_path)
 
     # Load model
@@ -255,18 +255,22 @@ def load_checkpoint(
     model.load_state_dict(state_dict)
     logger.info(f"Loaded model from {ckpt_dir / 'model.pt'}")
 
-    # Load training state
-    training_state = torch.load(
-        ckpt_dir / "training_state.pt",
-        map_location="cpu",
-        weights_only=True,
-    )
-    if optimizer is not None:
-        optimizer.load_state_dict(training_state["optimizer"])
-    if scheduler is not None:
-        scheduler.load_state_dict(training_state["scheduler"])
+    # Load training state if available (missing for fine-tune starts)
+    training_state_path = ckpt_dir / "training_state.pt"
+    if training_state_path.exists():
+        training_state = torch.load(
+            training_state_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+        if optimizer is not None:
+            optimizer.load_state_dict(training_state["optimizer"])
+        if scheduler is not None:
+            scheduler.load_state_dict(training_state["scheduler"])
+        return training_state
 
-    return training_state
+    logger.info("No training_state.pt found, starting fresh (fine-tune)")
+    return {"epoch": -1, "global_step": 0}
 
 
 def find_latest_checkpoint(output_dir: str) -> Optional[str]:

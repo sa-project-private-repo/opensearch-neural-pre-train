@@ -92,37 +92,68 @@ def encode_texts(
     batch_size: int = 256,
     device: str = "cuda",
     max_length: int = 256,
+    num_gpus: int = 0,
 ) -> np.ndarray:
     """
     Encode all texts with BGE-M3.
+
+    Uses multi-GPU parallel encoding when num_gpus > 1.
+
+    Args:
+        texts: List of texts to encode
+        model_name: Teacher model name
+        batch_size: Encoding batch size (per GPU for multi-GPU)
+        device: Device for single-GPU encoding
+        max_length: Maximum sequence length
+        num_gpus: Number of GPUs (0=auto-detect, 1=single)
 
     Returns:
         embeddings: numpy array [num_texts, 1024]
     """
     from sentence_transformers import SentenceTransformer
 
+    if num_gpus == 0:
+        num_gpus = torch.cuda.device_count()
+
     logger.info(f"Loading teacher model: {model_name}")
     model = SentenceTransformer(model_name, device=device)
     model.max_seq_length = max_length
 
-    logger.info(
-        f"Encoding {len(texts):,} texts "
-        f"(batch_size={batch_size}, device={device})..."
-    )
     start = time.time()
 
-    embeddings = model.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    )
+    if num_gpus > 1:
+        logger.info(
+            f"Multi-GPU encoding: {len(texts):,} texts "
+            f"on {num_gpus} GPUs (batch_size={batch_size}/GPU)..."
+        )
+        pool = model.start_multi_process_pool(
+            target_devices=[f"cuda:{i}" for i in range(num_gpus)]
+        )
+        embeddings = model.encode_multi_process(
+            texts,
+            pool,
+            batch_size=batch_size,
+            normalize_embeddings=True,
+        )
+        model.stop_multi_process_pool(pool)
+    else:
+        logger.info(
+            f"Single-GPU encoding: {len(texts):,} texts "
+            f"(batch_size={batch_size}, device={device})..."
+        )
+        embeddings = model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
 
     elapsed = time.time() - start
     logger.info(
         f"Encoding done in {elapsed:.1f}s "
-        f"({len(texts) / elapsed:.0f} texts/s)"
+        f"({len(texts) / elapsed:.0f} texts/s) "
+        f"[{num_gpus} GPU(s)]"
     )
 
     return embeddings
@@ -259,6 +290,12 @@ def main() -> None:
         action="store_true",
         help="Save embeddings to disk for reuse",
     )
+    parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=0,
+        help="Number of GPUs for encoding (0=auto-detect all)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -282,6 +319,7 @@ def main() -> None:
             batch_size=args.batch_size,
             device=args.device,
             max_length=args.max_length,
+            num_gpus=args.num_gpus,
         )
 
         if args.save_embeddings:

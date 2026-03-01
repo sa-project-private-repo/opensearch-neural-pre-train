@@ -138,24 +138,88 @@ def collect_doc_indices(
     return np.array(doc_indices, dtype=np.int64), doc_idx_to_faiss
 
 
-def build_faiss_index(
+def batch_search_unique_queries(
     embeddings: np.ndarray,
+    text_to_idx: Dict[str, int],
+    file_patterns: List[str],
     doc_indices: np.ndarray,
-) -> "faiss.Index":
-    """Build FAISS index over document embeddings."""
-    import faiss
+    search_k: int = 100,
+    batch_size: int = 4096,
+    gpu_id: int = 0,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """
+    Batch-search all unique queries using PyTorch GPU matmul.
 
-    doc_embeddings = embeddings[doc_indices].astype(np.float32)
-    dim = doc_embeddings.shape[1]
+    Uses torch.mm on GPU for inner-product search (B200 compatible).
 
-    # Use flat index for exact search (documents fit in memory)
-    index = faiss.IndexFlatIP(dim)  # Inner product (embeddings are normalized)
-    index.add(doc_embeddings)
+    Returns:
+        query_cache: {query_hash: (scores[search_k], ids[search_k])}
+    """
+    import torch
+
+    # Collect unique query hashes
+    unique_q_hashes: List[str] = []
+    seen: Set[str] = set()
+
+    all_files: List[Path] = []
+    for pattern in file_patterns:
+        all_files.extend(sorted(Path(f) for f in glob.glob(pattern)))
+
+    for file_path in all_files:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    item = json.loads(line.strip())
+                except json.JSONDecodeError:
+                    continue
+                q_hash = text_hash(item.get("query", ""))
+                if q_hash not in seen and q_hash in text_to_idx:
+                    seen.add(q_hash)
+                    unique_q_hashes.append(q_hash)
 
     logger.info(
-        f"FAISS index built: {index.ntotal:,} vectors, dim={dim}"
+        f"Batch searching {len(unique_q_hashes):,} unique queries "
+        f"against {len(doc_indices):,} docs on GPU {gpu_id}..."
     )
-    return index
+
+    # Load document embeddings to GPU
+    device = torch.device(f"cuda:{gpu_id}")
+    doc_embs = torch.from_numpy(
+        embeddings[doc_indices].astype(np.float32)
+    ).to(device)
+    logger.info(
+        f"Doc embeddings on GPU: {doc_embs.shape}, "
+        f"{doc_embs.element_size() * doc_embs.nelement() / 1e9:.1f}GB"
+    )
+
+    # Batch search with PyTorch matmul
+    query_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
+    for start in tqdm(
+        range(0, len(unique_q_hashes), batch_size),
+        desc="GPU batch search",
+    ):
+        batch_hashes = unique_q_hashes[start : start + batch_size]
+        batch_indices = [text_to_idx[h] for h in batch_hashes]
+        q_batch = torch.from_numpy(
+            embeddings[batch_indices].astype(np.float32)
+        ).to(device)
+
+        # Inner product: [batch, dim] x [dim, n_docs] -> [batch, n_docs]
+        scores = torch.mm(q_batch, doc_embs.T)
+        topk_scores, topk_ids = torch.topk(scores, search_k, dim=1)
+
+        topk_scores_np = topk_scores.cpu().numpy()
+        topk_ids_np = topk_ids.cpu().numpy()
+
+        for i, q_hash in enumerate(batch_hashes):
+            query_cache[q_hash] = (topk_scores_np[i], topk_ids_np[i])
+
+    del doc_embs
+    torch.cuda.empty_cache()
+
+    logger.info(f"Cached search results for {len(query_cache):,} queries")
+    return query_cache
 
 
 def mine_negatives(
@@ -166,7 +230,6 @@ def mine_negatives(
     hash_to_text: Dict[str, str],
     doc_indices: np.ndarray,
     doc_idx_to_faiss: Dict[int, int],
-    faiss_index: "faiss.Index",
     k: int = 7,
     rank_start: int = 10,
     rank_end: int = 50,
@@ -175,32 +238,34 @@ def mine_negatives(
     """
     Mine hard negatives for each training example.
 
-    For each query:
-    1. Search FAISS for top-{search_k} nearest documents
-    2. Filter out the positive document
-    3. Select k negatives from ranks {rank_start}-{rank_end}
-    4. Compute teacher cosine scores for each negative
+    Phase 1: Batch GPU search for all unique queries (PyTorch matmul).
+    Phase 2: Assign k negatives per triplet from cached results.
 
     Returns:
         Total number of examples processed.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build reverse mapping: embedding index -> hash
+    idx_to_hash: Dict[int, str] = {}
+    for h, idx in text_to_idx.items():
+        idx_to_hash[idx] = h
+
+    # Phase 1: Batch GPU search for all unique queries
+    query_cache = batch_search_unique_queries(
+        embeddings, text_to_idx, file_patterns,
+        doc_indices, search_k,
+    )
+
+    # Phase 2: Assign negatives per triplet
     total = 0
     skipped = 0
-
-    # Cache query search results (queries repeat across triplets)
-    query_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
 
     all_files: List[Path] = []
     for pattern in file_patterns:
         all_files.extend(sorted(Path(f) for f in glob.glob(pattern)))
 
-    # Build index-to-hash reverse mapping for doc_indices
-    idx_to_hash: Dict[int, str] = {}
-    for h, idx in text_to_idx.items():
-        idx_to_hash[idx] = h
-
-    for file_path in tqdm(all_files, desc="Mining negatives"):
+    for file_path in tqdm(all_files, desc="Assigning negatives"):
         out_path = output_dir / file_path.name
 
         with (
@@ -218,42 +283,30 @@ def mine_negatives(
                 q_hash = text_hash(query)
                 p_hash = text_hash(positive)
 
-                q_idx = text_to_idx.get(q_hash)
-                if q_idx is None:
+                cached = query_cache.get(q_hash)
+                if cached is None:
                     fout.write(
                         json.dumps(item, ensure_ascii=False) + "\n"
                     )
                     skipped += 1
                     continue
 
-                # Search FAISS (cached per unique query)
-                if q_hash not in query_cache:
-                    q_emb = embeddings[q_idx : q_idx + 1].astype(
-                        np.float32
-                    )
-                    scores, faiss_ids = faiss_index.search(
-                        q_emb, search_k
-                    )
-                    query_cache[q_hash] = (scores[0], faiss_ids[0])
+                scores, faiss_ids = cached
 
-                scores, faiss_ids = query_cache[q_hash]
-
-                # Map FAISS IDs back to embedding indices
                 p_faiss_id = doc_idx_to_faiss.get(
                     text_to_idx.get(p_hash, -1), -1
                 )
 
-                # Select negatives from rank_start to rank_end
                 neg_texts: List[str] = []
                 neg_scores: List[float] = []
 
-                for rank_pos in range(min(rank_start, len(faiss_ids)),
-                                      min(rank_end, len(faiss_ids))):
+                for rank_pos in range(
+                    min(rank_start, len(faiss_ids)),
+                    min(rank_end, len(faiss_ids)),
+                ):
                     fid = int(faiss_ids[rank_pos])
-                    if fid < 0:
+                    if fid < 0 or fid == p_faiss_id:
                         continue
-                    if fid == p_faiss_id:
-                        continue  # Skip positive
 
                     emb_idx = int(doc_indices[fid])
                     neg_hash = idx_to_hash.get(emb_idx)
@@ -265,23 +318,21 @@ def mine_negatives(
                         continue
 
                     neg_texts.append(neg_text)
-                    neg_scores.append(round(float(scores[rank_pos]), 6))
+                    neg_scores.append(
+                        round(float(scores[rank_pos]), 6)
+                    )
 
                     if len(neg_texts) >= k:
                         break
 
-                # Pad if not enough negatives found
+                # Pad if not enough
                 if len(neg_texts) < k:
-                    # Fall back to original negative
                     orig_neg = item.get("negative", positive)
-                    orig_neg_score = item.get(
-                        "teacher_neg_score", 0.0
-                    )
+                    orig_score = item.get("teacher_neg_score", 0.0)
                     while len(neg_texts) < k:
                         neg_texts.append(orig_neg)
-                        neg_scores.append(orig_neg_score)
+                        neg_scores.append(orig_score)
 
-                # Build output item
                 out_item = {
                     "query": query,
                     "positive": positive,
@@ -292,10 +343,7 @@ def mine_negatives(
                     "teacher_neg_scores": neg_scores,
                 }
 
-                # Preserve metadata
-                for meta_key in (
-                    "pair_type", "difficulty", "source",
-                ):
+                for meta_key in ("pair_type", "difficulty", "source"):
                     if meta_key in item:
                         out_item[meta_key] = item[meta_key]
 
@@ -305,7 +353,9 @@ def mine_negatives(
                 total += 1
 
     if skipped > 0:
-        logger.warning(f"Skipped {skipped:,} examples (missing embeddings)")
+        logger.warning(
+            f"Skipped {skipped:,} examples (missing embeddings)"
+        )
 
     return total
 
@@ -396,14 +446,12 @@ def main() -> None:
     # Build text mapping (hash -> actual text)
     hash_to_text = build_text_mapping([args.input_pattern])
 
-    # Collect document indices and build FAISS index
+    # Collect document indices
     doc_indices, doc_idx_to_faiss = collect_doc_indices(
         [args.input_pattern], text_to_idx,
     )
 
-    faiss_index = build_faiss_index(embeddings, doc_indices)
-
-    # Mine negatives
+    # Mine negatives (uses PyTorch GPU matmul for search)
     start = time.time()
     total = mine_negatives(
         file_patterns=[args.input_pattern],
@@ -413,7 +461,6 @@ def main() -> None:
         hash_to_text=hash_to_text,
         doc_indices=doc_indices,
         doc_idx_to_faiss=doc_idx_to_faiss,
-        faiss_index=faiss_index,
         k=args.k,
         rank_start=args.rank_start,
         rank_end=args.rank_end,

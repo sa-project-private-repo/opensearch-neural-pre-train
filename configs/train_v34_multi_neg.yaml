@@ -32,7 +32,7 @@ data:
     - "data/v29.0_multi_neg/train_*.jsonl"  # Multi-negative format
   val_files:
     - "data/v29.0_multi_neg/val.jsonl"
-  batch_size: 64
+  batch_size: 16                   # Reduced: 16*(1+1+7)=144 seqs/GPU (was 576)
   query_max_length: 64
   doc_max_length: 256
   num_workers: 4
@@ -44,7 +44,7 @@ training:
   weight_decay: 0.01
   warmup_ratio: 0.05
   gradient_clip: 1.0
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 16  # 16*16*8=2048 eff_batch (same as V33)
   mixed_precision: "bf16"
   output_dir: "outputs/train_v34_multi_neg"
   log_every_n_steps: 50

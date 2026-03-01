@@ -92,13 +92,14 @@ train-resume: ## Resume V33 DDP training from checkpoint
 # V34 Knowledge Distillation Training
 # ============================================================================
 
-precompute-teacher: ## Pre-compute BGE-M3 teacher scores for KD
+precompute-teacher: ## Pre-compute BGE-M3 teacher scores for KD (8 GPUs)
 	$(ACTIVATE) && $(PYTHON) scripts/precompute_teacher_scores.py \
 		--input-pattern "data/v29.0/train_*.jsonl" \
 		--val-pattern "data/v29.0/val.jsonl" \
 		--output-dir $(KD_DATA_DIR) \
 		--batch-size 256 \
-		--save-embeddings
+		--save-embeddings \
+		--num-gpus 8
 
 train-v34-kd: ## Start V34 KD training (requires precompute-teacher first)
 	@test -d $(KD_DATA_DIR) || (echo "Run 'make precompute-teacher' first" && exit 1)
