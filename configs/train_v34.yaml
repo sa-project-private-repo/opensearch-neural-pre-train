@@ -1,0 +1,51 @@
+# V34: V33 + expanded Korean data + extended training + relaxed query sparsity
+#
+# Pure SPLADE v2 recipe (identical architecture to V33):
+# - MLM head -> log(1 + ReLU) -> max pooling
+# - FLOPS regularization with quadratic lambda warmup
+# - No context gate, no language filtering
+#
+# Changes from V33:
+# - lambda_q: 0.008 (was 0.01, relaxed for more query tokens)
+# - flops_warmup_steps: 25000 (was 20000, proportional to more data)
+# - train_files: data/v34.0/ (expanded Korean corpus)
+# - num_epochs: 30 (was 25)
+#
+# Base model: skt/A.X-Encoder-base (ModernBERT, 50K vocab, 768 hidden, 22 layers)
+# Hardware: 8x NVIDIA B200 (183GB VRAM each)
+# Effective batch size: 64 * 4 * 8 = 2048
+
+model:
+  name: "skt/A.X-Encoder-base"
+  dropout: 0.1
+
+loss:
+  lambda_q: 0.008       # Query FLOPS regularization (relaxed from 0.01)
+  lambda_d: 0.003       # Doc FLOPS regularization
+  temperature: 1.0      # Must be 1.0 for sparse dot-product (not cosine)
+  flops_warmup_steps: 25000  # Quadratic warmup (~1/3 of training)
+  lambda_kd: 0.0        # No KD for now
+  kd_temperature: 1.0
+
+data:
+  train_files:
+    - "data/v34.0/train_shard_*.jsonl"
+  val_files:
+    - "data/v34.0/val.jsonl"
+  batch_size: 64         # Per-GPU
+  query_max_length: 64
+  doc_max_length: 256
+  num_workers: 4
+
+training:
+  num_epochs: 30
+  learning_rate: 5.0e-5   # sqrt-scaled for effective batch 2048
+  weight_decay: 0.01
+  warmup_ratio: 0.06     # ~3500 steps warmup
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 4
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v34"
+  log_every_n_steps: 50
+  save_every_n_epochs: 5
+  seed: 42

@@ -51,8 +51,8 @@ class HFBenchmarkRunner:
 
         # Load encoders
         ckpt = self.checkpoint_path
-        if ckpt and ("v33" in ckpt or "train_v33" in ckpt):
-            logger.info(f"Loading V33 encoders (checkpoint: {ckpt})...")
+        if ckpt and ("v33" in ckpt or "train_v33" in ckpt or "v34" in ckpt or "train_v34" in ckpt):
+            logger.info(f"Loading V33-compatible encoders (checkpoint: {ckpt})...")
             self.dense_encoder, self.sparse_encoder = create_encoders_v33(
                 self.config,
                 checkpoint_path=ckpt,
@@ -364,7 +364,7 @@ def main():
         "--model-version",
         type=str,
         default=None,
-        choices=["v28", "v29", "v30", "v33"],
+        choices=["v28", "v29", "v30", "v33", "v34"],
         help="Model version to use (auto-detected from checkpoint path if not specified)",
     )
     args = parser.parse_args()
