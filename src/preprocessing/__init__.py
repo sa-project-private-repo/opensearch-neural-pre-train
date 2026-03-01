@@ -8,7 +8,6 @@ This module provides tools for:
 - Text cleaning and deduplication
 """
 
-from src.preprocessing.config import PipelineConfig
 from src.preprocessing.pipeline import PreprocessingPipeline
 
-__all__ = ["PipelineConfig", "PreprocessingPipeline"]
+__all__ = ["PreprocessingPipeline"]

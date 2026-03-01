@@ -12,10 +12,6 @@ from src.preprocessing.downloaders.dialog import (
     KoreanInstructionsDownloader,
     PersonaChatDownloader,
 )
-from src.preprocessing.downloaders.travel import (
-    TravelDownloader,
-    TravelTourismDownloader,
-)
 
 __all__ = [
     "BaseDownloader",
@@ -29,11 +25,8 @@ __all__ = [
     "YNATDownloader",
     "KoreanInstructionsDownloader",
     "PersonaChatDownloader",
-    "TravelDownloader",
-    "TravelTourismDownloader",
 ]
 
-# Registry of all available downloaders
 DOWNLOADER_REGISTRY = {
     "kor_nli": KorNLIDownloader,
     "klue_nli": KLUENLIDownloader,
@@ -44,8 +37,6 @@ DOWNLOADER_REGISTRY = {
     "ynat": YNATDownloader,
     "korean_instructions": KoreanInstructionsDownloader,
     "persona_chat": PersonaChatDownloader,
-    "travel": TravelDownloader,
-    "travel_tourism": TravelTourismDownloader,
 }
 
 

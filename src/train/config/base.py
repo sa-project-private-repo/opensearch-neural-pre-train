@@ -153,10 +153,10 @@ class TrainingConfig:
     """Evaluate on validation set every N steps."""
 
     # Output
-    output_dir: str = "outputs/train_v22"
+    output_dir: str = "outputs/train_v33"
     """Directory for checkpoints and logs."""
 
-    experiment_name: str = "splade_v22"
+    experiment_name: str = "splade_v33"
     """Name for TensorBoard experiment."""
 
 

@@ -1,9 +1,7 @@
-"""CLI module for SPLADE training commands."""
+"""CLI module for V33 SPLADE training."""
 
-from src.train.cli.train_v22 import main as train_v22
-from src.train.cli.resume import main as resume
+from src.train.cli.train_v33_ddp import main as train_v33
 
 __all__ = [
-    "train_v22",
-    "resume",
+    "train_v33",
 ]
