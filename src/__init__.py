@@ -1,25 +1,18 @@
 """
-OpenSearch Neural Sparse Training - Source Package
+OpenSearch Neural Sparse Training - Source Package (V33)
 
-This package contains the SPLADE model for neural sparse retrieval.
+This package contains SPLADEModernBERT for Korean neural sparse retrieval.
 """
 
-__version__ = "0.4.0"
+__version__ = "33.0.0"
 __author__ = "OpenSearch Neural Sparse Team"
 
-# Only export the model - other modules have been consolidated into notebooks
-from src.model.splade_model import (
-    create_splade_model,
-    SPLADEDoc,
-    SPLADEDocWithIDF,
-    SPLADEDocExpansion,
-)
+from src.model.splade_modern import SPLADEModernBERT
+from src.model.losses import SPLADELossV33
 
 __all__ = [
     "__version__",
     "__author__",
-    "create_splade_model",
-    "SPLADEDoc",
-    "SPLADEDocWithIDF",
-    "SPLADEDocExpansion",
+    "SPLADEModernBERT",
+    "SPLADELossV33",
 ]

@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional, Type, TypeVar
 import yaml
 
 from src.train.config.base import BaseConfig
-from src.train.config.v22 import V22Config, CurriculumPhase
+from src.train.config.v33 import V33Config
 
 
 T = TypeVar("T", bound=BaseConfig)
@@ -19,7 +19,7 @@ T = TypeVar("T", bound=BaseConfig)
 
 def load_config(
     config_path: Optional[str] = None,
-    config_type: Type[T] = V22Config,
+    config_type: Type[T] = V33Config,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> T:
     """
@@ -54,16 +54,10 @@ def load_config(
     if overrides:
         config_dict = _deep_merge(config_dict, overrides)
 
-    # Handle curriculum phases if present
-    if "curriculum_phases" in config_dict:
-        config_dict["curriculum_phases"] = [
-            CurriculumPhase(**phase) if isinstance(phase, dict) else phase
-            for phase in config_dict["curriculum_phases"]
-        ]
-
     # Create config instance
     config = config_type(**config_dict)
-    config.validate()
+    if hasattr(config, "validate"):
+        config.validate()
 
     return config
 

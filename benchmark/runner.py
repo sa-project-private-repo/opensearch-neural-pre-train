@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from benchmark.config import BenchmarkConfig
 from benchmark.data_loader import BenchmarkData, load_benchmark_data
-from benchmark.encoders import create_encoders, create_encoders_v29, create_encoders_v30
+from benchmark.encoders import create_encoders_v33
 from benchmark.index_manager import IndexManager
 from benchmark.indexer import encode_documents, index_documents
 from benchmark.metrics import (
@@ -58,7 +58,7 @@ class BenchmarkRunner:
 
         # Load encoders
         logger.info("Loading encoders...")
-        self.dense_encoder, self.sparse_encoder = create_encoders_v29(self.config)
+        self.dense_encoder, self.sparse_encoder = create_encoders_v33(self.config)
 
         # Load data
         logger.info("Loading benchmark data...")
@@ -437,7 +437,7 @@ def main():
             # Load from saved benchmark data if available
             logger.info("Loading encoders (skip-setup mode)...")
             runner.index_manager = IndexManager(config)
-            runner.dense_encoder, runner.sparse_encoder = create_encoders_v30(config)
+            runner.dense_encoder, runner.sparse_encoder = create_encoders_v33(config)
 
             if benchmark_data_path.exists():
                 logger.info(f"Loading saved benchmark data from {benchmark_data_path}")
