@@ -75,6 +75,8 @@ class V33DataConfig:
     query_max_length: int = 64
     doc_max_length: int = 256
     num_workers: int = 4
+    num_hard_negatives: int = 1
+    """Number of hard negatives per query (1 = single neg, >1 = multi-neg)."""
 
 
 @dataclass

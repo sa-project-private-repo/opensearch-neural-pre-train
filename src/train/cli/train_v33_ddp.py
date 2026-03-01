@@ -320,19 +320,30 @@ def train_epoch(
         p_mask = batch["positive_attention_mask"].to(device)
         n_ids = batch["negative_input_ids"].to(device)
         n_mask = batch["negative_attention_mask"].to(device)
+        num_negatives = batch.get("num_negatives", 1)
 
         # Teacher scores for MarginMSE KD (pre-computed)
         t_pos = batch.get("teacher_pos_scores")
         t_neg = batch.get("teacher_neg_scores")
         if t_pos is not None:
             t_pos = t_pos.to(device)
+        if t_neg is not None:
             t_neg = t_neg.to(device)
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            # Encode query, positive, negative
+            # Encode query, positive
             anchor_repr, _ = model(q_ids, q_mask)
             positive_repr, _ = model(p_ids, p_mask)
+
+            # Encode negatives: [batch*k, vocab] for multi-neg
             negative_repr, _ = model(n_ids, n_mask)
+
+            # Reshape to [batch, k, vocab] if multi-neg
+            if num_negatives > 1:
+                neg_batch = anchor_repr.shape[0]
+                negative_repr = negative_repr.view(
+                    neg_batch, num_negatives, -1
+                )
 
             # Compute loss
             loss, loss_dict = loss_fn(

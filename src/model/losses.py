@@ -101,19 +101,34 @@ class SPLADELossV33(nn.Module):
         Matches pairwise score margins between student and teacher:
         L = MSE(s_pos - s_neg, t_pos - t_neg)
 
-        More robust than pointwise MSE for ranking tasks.
+        Supports multi-hard-negatives: averages MSE over k negatives.
 
         Args:
             anchor: [batch, vocab] query representations
             positive: [batch, vocab] positive doc representations
-            negative: [batch, vocab] hard negative representations
+            negative: [batch, vocab] or [batch, k, vocab]
             teacher_pos_scores: [batch] teacher(q, pos) scores
-            teacher_neg_scores: [batch] teacher(q, neg) scores
+            teacher_neg_scores: [batch] or [batch, k] teacher scores
         """
-        student_pos = (anchor * positive).sum(dim=-1)
-        student_neg = (anchor * negative).sum(dim=-1)
-        student_margin = student_pos - student_neg
-        teacher_margin = teacher_pos_scores - teacher_neg_scores
+        student_pos = (anchor * positive).sum(dim=-1)  # [batch]
+
+        if negative.dim() == 3:
+            # Multi-hard-negatives: [batch, k, vocab]
+            student_neg = (
+                (anchor.unsqueeze(1) * negative).sum(dim=-1)
+            )  # [batch, k]
+            student_margin = (
+                student_pos.unsqueeze(1) - student_neg
+            )  # [batch, k]
+            teacher_margin = (
+                teacher_pos_scores.unsqueeze(1) - teacher_neg_scores
+            )  # [batch, k]
+        else:
+            # Single negative: [batch, vocab]
+            student_neg = (anchor * negative).sum(dim=-1)
+            student_margin = student_pos - student_neg
+            teacher_margin = teacher_pos_scores - teacher_neg_scores
+
         return F.mse_loss(student_margin, teacher_margin)
 
     def _infonce_loss(
@@ -123,35 +138,42 @@ class SPLADELossV33(nn.Module):
         negative: torch.Tensor,
     ) -> torch.Tensor:
         """
-        InfoNCE with in-batch negatives + explicit hard negative.
+        InfoNCE with in-batch negatives + explicit hard negative(s).
+
+        Supports multi-hard-negatives: negative can be [batch, k, vocab].
 
         Args:
             anchor: [batch, vocab] query representations
             positive: [batch, vocab] positive doc representations
-            negative: [batch, vocab] hard negative representations
+            negative: [batch, vocab] or [batch, k, vocab]
         """
         batch_size = anchor.shape[0]
-
-        # Positive scores: [batch]
-        pos_scores = (anchor * positive).sum(dim=-1) / self.temperature
 
         # In-batch negative scores: [batch, batch]
         neg_scores = torch.mm(anchor, positive.t()) / self.temperature
 
-        # Explicit hard negative scores: [batch]
-        hard_neg_scores = (
-            (anchor * negative).sum(dim=-1) / self.temperature
-        )
+        # Hard negative scores
+        if negative.dim() == 3:
+            # Multi-hard-negatives: [batch, k, vocab]
+            # [batch, 1, vocab] * [batch, k, vocab] -> [batch, k]
+            hard_neg_scores = (
+                (anchor.unsqueeze(1) * negative).sum(dim=-1)
+                / self.temperature
+            )  # [batch, k]
+        else:
+            # Single hard negative: [batch, vocab] -> [batch, 1]
+            hard_neg_scores = (
+                (anchor * negative).sum(dim=-1) / self.temperature
+            ).unsqueeze(1)  # [batch, 1]
 
         # Labels: diagonal is positive
         labels = torch.arange(
             batch_size, device=anchor.device
         )
 
-        # Combine: [batch, batch + 1]
-        # Column 0..batch-1: in-batch, column batch: hard negative
+        # Combine: [batch, batch + k]
         all_scores = torch.cat(
-            [neg_scores, hard_neg_scores.unsqueeze(1)], dim=1
+            [neg_scores, hard_neg_scores], dim=1
         )
 
         return F.cross_entropy(all_scores, labels)

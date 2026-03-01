@@ -47,6 +47,13 @@ class TripletCollator:
         """
         Collate a batch of triplets.
 
+        Supports both single-negative and multi-negative formats:
+        - Single: {"query": ..., "positive": ..., "negative": ...}
+        - Multi:  {"query": ..., "positive": ..., "negatives": [...]}
+
+        For multi-negatives, all negatives are flattened to [batch*k, seq]
+        for efficient tokenization. The `num_negatives` field indicates k.
+
         Args:
             batch: List of triplet dictionaries
 
@@ -56,14 +63,33 @@ class TripletCollator:
         queries = [item["query"] for item in batch]
         positives = [item["positive"] for item in batch]
 
-        # Handle None negatives
-        negatives = []
-        for item in batch:
-            neg = item.get("negative")
-            if neg is None:
-                # Use positive as fallback (will be filtered by loss function)
-                neg = item["positive"]
-            negatives.append(neg)
+        # Detect multi-negative format
+        has_multi_neg = (
+            "negatives" in batch[0]
+            and isinstance(batch[0]["negatives"], list)
+        )
+
+        if has_multi_neg:
+            # Multi-hard-negatives: flatten to [batch*k] texts
+            num_negatives = len(batch[0]["negatives"])
+            all_negatives = []
+            for item in batch:
+                negs = item.get("negatives", [])
+                # Pad to num_negatives if short
+                while len(negs) < num_negatives:
+                    negs.append(
+                        negs[-1] if negs else item["positive"]
+                    )
+                all_negatives.extend(negs[:num_negatives])
+        else:
+            # Single negative
+            num_negatives = 1
+            all_negatives = []
+            for item in batch:
+                neg = item.get("negative")
+                if neg is None:
+                    neg = item["positive"]
+                all_negatives.append(neg)
 
         # Tokenize all texts (asymmetric lengths)
         query_encoding = self.tokenizer(
@@ -82,8 +108,9 @@ class TripletCollator:
             return_tensors="pt",
         )
 
+        # [batch*k, seq_len] for multi-neg, [batch, seq_len] for single
         negative_encoding = self.tokenizer(
-            negatives,
+            all_negatives,
             padding=True,
             truncation=True,
             max_length=self.doc_max_length,
@@ -97,17 +124,27 @@ class TripletCollator:
             "positive_attention_mask": positive_encoding["attention_mask"],
             "negative_input_ids": negative_encoding["input_ids"],
             "negative_attention_mask": negative_encoding["attention_mask"],
+            "num_negatives": num_negatives,
             # Raw texts for teacher model KD
             "query_texts": queries,
             "positive_texts": positives,
         }
 
-        # Pre-computed teacher scores for MarginMSE KD
+        # Teacher scores
         if "teacher_pos_score" in batch[0]:
             result["teacher_pos_scores"] = torch.tensor(
                 [item["teacher_pos_score"] for item in batch],
                 dtype=torch.float32,
             )
+
+        if has_multi_neg and "teacher_neg_scores" in batch[0]:
+            # Multi-neg teacher scores: [batch, k]
+            result["teacher_neg_scores"] = torch.tensor(
+                [item["teacher_neg_scores"] for item in batch],
+                dtype=torch.float32,
+            )
+        elif "teacher_neg_score" in batch[0]:
+            # Single neg teacher score: [batch]
             result["teacher_neg_scores"] = torch.tensor(
                 [item.get("teacher_neg_score", 0.0) for item in batch],
                 dtype=torch.float32,

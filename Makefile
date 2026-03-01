@@ -2,8 +2,9 @@
 
 .PHONY: help setup test train train-bg train-resume \
 	precompute-teacher train-v34-kd train-v34-kd-bg \
+	mine-multi-negatives train-v34-multi-neg train-v34-multi-neg-bg \
 	benchmark benchmark-ko-strategyqa benchmark-miracl benchmark-mrtydi \
-	benchmark-v34 \
+	benchmark-v34 benchmark-v34-multi-neg \
 	export-hf tensorboard logs monitor \
 	lint format clean clean-outputs clean-cache \
 	upload-data download-data upload-outputs download-outputs info
@@ -27,6 +28,12 @@ V34_CONFIG := configs/train_v34_kd.yaml
 V34_OUTPUT := outputs/train_v34_kd
 V34_CHECKPOINT := $(V34_OUTPUT)/final_model/model.pt
 KD_DATA_DIR := data/v29.0_kd
+
+# V34 Multi-neg variables
+V34_MULTI_NEG_CONFIG := configs/train_v34_multi_neg.yaml
+V34_MULTI_NEG_OUTPUT := outputs/train_v34_multi_neg
+V34_MULTI_NEG_CHECKPOINT := $(V34_MULTI_NEG_OUTPUT)/final_model/model.pt
+MULTI_NEG_DATA_DIR := data/v29.0_multi_neg
 
 # S3 paths
 S3_BUCKET := s3://sewoong-ml-assets/opensearch-neural-pre-train
@@ -110,6 +117,36 @@ train-v34-kd-bg: ## Start V34 KD training (background)
 	@echo "V34 KD training started. Logs: $(V34_OUTPUT)/nohup.log"
 
 # ============================================================================
+# V34 Multi-Hard-Negative Training
+# ============================================================================
+
+mine-multi-negatives: ## Mine k=7 hard negatives using cached BGE-M3 embeddings
+	@test -f $(KD_DATA_DIR)/teacher_embeddings.npy || (echo "Run 'make precompute-teacher' first" && exit 1)
+	$(ACTIVATE) && $(PYTHON) scripts/mine_multi_negatives.py \
+		--input-pattern "$(KD_DATA_DIR)/train_*.jsonl" \
+		--val-pattern "$(KD_DATA_DIR)/val.jsonl" \
+		--embeddings $(KD_DATA_DIR)/teacher_embeddings.npy \
+		--text-index $(KD_DATA_DIR)/text_to_idx.json \
+		--output-dir $(MULTI_NEG_DATA_DIR) \
+		--k 7
+
+train-v34-multi-neg: ## Start V34 multi-neg training (requires mine-multi-negatives)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_MULTI_NEG_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)
+
+train-v34-multi-neg-bg: ## Start V34 multi-neg training (background)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	@mkdir -p $(V34_MULTI_NEG_OUTPUT)
+	nohup bash -c '$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_MULTI_NEG_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)' > $(V34_MULTI_NEG_OUTPUT)/nohup.log 2>&1 &
+	@echo "V34 multi-neg training started. Logs: $(V34_MULTI_NEG_OUTPUT)/nohup.log"
+
+# ============================================================================
 # Benchmark
 # ============================================================================
 
@@ -149,6 +186,20 @@ benchmark-v34: ## Run all benchmarks with V34 KD model
 		--dataset mrtydi-ko \
 		--checkpoint $(V34_CHECKPOINT) \
 		--output-dir outputs/benchmarks/v34_kd/mrtydi-ko --cleanup
+
+benchmark-v34-multi-neg: ## Run all benchmarks with V34 multi-neg model
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--checkpoint $(V34_MULTI_NEG_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_multi_neg/ko-strategyqa --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset miracl-ko \
+		--checkpoint $(V34_MULTI_NEG_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_multi_neg/miracl-ko --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset mrtydi-ko \
+		--checkpoint $(V34_MULTI_NEG_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_multi_neg/mrtydi-ko --cleanup
 
 # ============================================================================
 # Export & Serve
