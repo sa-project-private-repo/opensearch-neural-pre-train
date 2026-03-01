@@ -1,0 +1,50 @@
+# V34: Knowledge Distillation from BGE-M3 teacher
+#
+# Builds on V33 checkpoint with MarginMSE distillation:
+# - Pre-computed teacher scores from BGE-M3 (cosine similarity)
+# - MarginMSE loss: MSE(student_margin, teacher_margin)
+# - Lower LR for fine-tuning from V33 converged checkpoint
+# - Fewer epochs (15 vs 25) since starting from pre-trained weights
+#
+# Prerequisites:
+#   python scripts/precompute_teacher_scores.py --save-embeddings
+#
+# Hardware: 8x NVIDIA B200 (183GB VRAM each)
+# Effective batch size: 64 * 4 * 8 = 2048
+
+model:
+  name: "skt/A.X-Encoder-base"
+  dropout: 0.1
+
+loss:
+  lambda_q: 0.01
+  lambda_d: 0.003
+  temperature: 1.0
+  flops_warmup_steps: 5000       # Shorter warmup (V33 FLOPS already converged)
+  lambda_kd: 0.0                 # KL disabled (requires online teacher)
+  kd_temperature: 1.0
+  lambda_margin_mse: 0.5         # MarginMSE from pre-computed teacher scores
+  lambda_initial_ratio: 0.5      # Higher initial FLOPS (V33 already sparse)
+
+data:
+  train_files:
+    - "data/v29.0_kd/train_*.jsonl"  # Augmented with teacher scores
+  val_files:
+    - "data/v29.0_kd/val.jsonl"
+  batch_size: 64
+  query_max_length: 64
+  doc_max_length: 256
+  num_workers: 4
+
+training:
+  num_epochs: 15
+  learning_rate: 1.0e-5          # Lower LR for fine-tuning
+  weight_decay: 0.01
+  warmup_ratio: 0.05             # Short warmup for fine-tuning
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 4
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v34_kd"
+  log_every_n_steps: 50
+  save_every_n_epochs: 5
+  seed: 42

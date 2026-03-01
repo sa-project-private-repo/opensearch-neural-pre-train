@@ -43,10 +43,16 @@ class V33LossConfig:
     """Quadratic warmup steps for FLOPS lambda."""
 
     lambda_kd: float = 0.0
-    """Knowledge distillation weight (0 = disabled)."""
+    """Knowledge distillation weight for KL divergence (0 = disabled)."""
 
     kd_temperature: float = 1.0
     """KD temperature for softmax."""
+
+    lambda_margin_mse: float = 0.0
+    """MarginMSE distillation weight (0 = disabled)."""
+
+    lambda_initial_ratio: float = 0.1
+    """Initial ratio for FLOPS lambda warmup (0.1 = start at 10%)."""
 
 
 @dataclass

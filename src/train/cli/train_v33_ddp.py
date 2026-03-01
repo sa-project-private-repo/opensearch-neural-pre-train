@@ -43,7 +43,10 @@ from src.train.config.v33 import (
 from src.train.data import load_training_data
 from src.train.data.collator import create_tokenizer
 from src.train.data.dataloader import TripletCollator
-from src.train.eval import MidTrainingEvaluator
+try:
+    from src.train.eval import MidTrainingEvaluator
+except ImportError:
+    MidTrainingEvaluator = None
 from src.train.utils import TensorBoardLogger, setup_logging
 
 
@@ -318,6 +321,13 @@ def train_epoch(
         n_ids = batch["negative_input_ids"].to(device)
         n_mask = batch["negative_attention_mask"].to(device)
 
+        # Teacher scores for MarginMSE KD (pre-computed)
+        t_pos = batch.get("teacher_pos_scores")
+        t_neg = batch.get("teacher_neg_scores")
+        if t_pos is not None:
+            t_pos = t_pos.to(device)
+            t_neg = t_neg.to(device)
+
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             # Encode query, positive, negative
             anchor_repr, _ = model(q_ids, q_mask)
@@ -330,6 +340,8 @@ def train_epoch(
                 positive_repr=positive_repr,
                 negative_repr=negative_repr,
                 global_step=global_step,
+                teacher_pos_scores=t_pos,
+                teacher_neg_scores=t_neg,
             )
 
         # Backward
@@ -354,6 +366,12 @@ def train_epoch(
                 lr = scheduler.get_last_lr()[0]
                 nz_q, nz_d = loss_fn.get_avg_nonzero()
 
+                kd_str = ""
+                if loss_dict.get("kd", 0) > 0:
+                    kd_str += f" | kd={loss_dict['kd']:.4f}"
+                if loss_dict.get("margin_mse", 0) > 0:
+                    kd_str += f" | mmse={loss_dict['margin_mse']:.4f}"
+
                 logger.info(
                     f"Step {global_step} | "
                     f"loss={loss.item():.4f} | "
@@ -363,7 +381,7 @@ def train_epoch(
                     f"lam_q={loss_dict['lambda_q']:.6f} | "
                     f"lam_d={loss_dict['lambda_d']:.6f} | "
                     f"nz_q={nz_q:.0f} | nz_d={nz_d:.0f} | "
-                    f"lr={lr:.2e}"
+                    f"lr={lr:.2e}{kd_str}"
                 )
 
                 if tb_logger:
@@ -390,6 +408,16 @@ def train_epoch(
                     tb_logger.log_scalar(
                         "train/nonzero_d", nz_d, global_step
                     )
+                    if loss_dict.get("kd", 0) > 0:
+                        tb_logger.log_scalar(
+                            "train/kd", loss_dict["kd"], global_step
+                        )
+                    if loss_dict.get("margin_mse", 0) > 0:
+                        tb_logger.log_scalar(
+                            "train/margin_mse",
+                            loss_dict["margin_mse"],
+                            global_step,
+                        )
 
         total_loss += loss.item()
         num_batches += 1
@@ -442,6 +470,10 @@ def main():
         logger.info(f"lambda_q: {config.loss.lambda_q}")
         logger.info(f"lambda_d: {config.loss.lambda_d}")
         logger.info(f"FLOPS warmup: {config.loss.flops_warmup_steps} steps")
+        if config.loss.lambda_kd > 0:
+            logger.info(f"KD (KL): lambda={config.loss.lambda_kd}")
+        if config.loss.lambda_margin_mse > 0:
+            logger.info(f"KD (MarginMSE): lambda={config.loss.lambda_margin_mse}")
         logger.info(f"Output: {output_dir}")
         logger.info("=" * 60)
 
@@ -497,6 +529,8 @@ def main():
         flops_warmup_steps=config.loss.flops_warmup_steps,
         lambda_kd=config.loss.lambda_kd,
         kd_temperature=config.loss.kd_temperature,
+        lambda_initial_ratio=config.loss.lambda_initial_ratio,
+        lambda_margin_mse=config.loss.lambda_margin_mse,
     ).to(device)
 
     # Optimizer
@@ -571,7 +605,7 @@ def main():
 
     # Mid-training evaluator
     evaluator = None
-    if is_main_process() and val_dataset is not None:
+    if is_main_process() and val_dataset is not None and MidTrainingEvaluator:
         try:
             evaluator = MidTrainingEvaluator(
                 tokenizer=tokenizer,

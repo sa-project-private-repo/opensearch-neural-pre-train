@@ -1,7 +1,9 @@
 # Makefile for V33 SPLADEModernBERT Training (B200 x8 DDP)
 
 .PHONY: help setup test train train-bg train-resume \
+	precompute-teacher train-v34-kd train-v34-kd-bg \
 	benchmark benchmark-ko-strategyqa benchmark-miracl benchmark-mrtydi \
+	benchmark-v34 \
 	export-hf tensorboard logs monitor \
 	lint format clean clean-outputs clean-cache \
 	upload-data download-data upload-outputs download-outputs info
@@ -19,6 +21,12 @@ V33_CHECKPOINT := $(V33_OUTPUT)/final_model/model.pt
 V33_LAUNCH := scripts/launch_v33_b200.sh
 HF_DIR := huggingface/v33
 BENCHMARK_OUTPUT := outputs/benchmarks/v33
+
+# V34 KD variables
+V34_CONFIG := configs/train_v34_kd.yaml
+V34_OUTPUT := outputs/train_v34_kd
+V34_CHECKPOINT := $(V34_OUTPUT)/final_model/model.pt
+KD_DATA_DIR := data/v29.0_kd
 
 # S3 paths
 S3_BUCKET := s3://sewoong-ml-assets/opensearch-neural-pre-train
@@ -74,6 +82,34 @@ train-resume: ## Resume V33 DDP training from checkpoint
 	$(ACTIVATE) && RESUME=1 bash $(V33_LAUNCH)
 
 # ============================================================================
+# V34 Knowledge Distillation Training
+# ============================================================================
+
+precompute-teacher: ## Pre-compute BGE-M3 teacher scores for KD
+	$(ACTIVATE) && $(PYTHON) scripts/precompute_teacher_scores.py \
+		--input-pattern "data/v29.0/train_*.jsonl" \
+		--val-pattern "data/v29.0/val.jsonl" \
+		--output-dir $(KD_DATA_DIR) \
+		--batch-size 256 \
+		--save-embeddings
+
+train-v34-kd: ## Start V34 KD training (requires precompute-teacher first)
+	@test -d $(KD_DATA_DIR) || (echo "Run 'make precompute-teacher' first" && exit 1)
+	$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)
+
+train-v34-kd-bg: ## Start V34 KD training (background)
+	@test -d $(KD_DATA_DIR) || (echo "Run 'make precompute-teacher' first" && exit 1)
+	@mkdir -p $(V34_OUTPUT)
+	nohup bash -c '$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)' > $(V34_OUTPUT)/nohup.log 2>&1 &
+	@echo "V34 KD training started. Logs: $(V34_OUTPUT)/nohup.log"
+
+# ============================================================================
 # Benchmark
 # ============================================================================
 
@@ -99,6 +135,20 @@ benchmark-mrtydi: ## Benchmark on Mr.TyDi-ko
 		--checkpoint $(V33_CHECKPOINT) \
 		--output-dir $(BENCHMARK_OUTPUT)/mrtydi-ko \
 		--cleanup
+
+benchmark-v34: ## Run all benchmarks with V34 KD model
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--checkpoint $(V34_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_kd/ko-strategyqa --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset miracl-ko \
+		--checkpoint $(V34_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_kd/miracl-ko --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset mrtydi-ko \
+		--checkpoint $(V34_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_kd/mrtydi-ko --cleanup
 
 # ============================================================================
 # Export & Serve

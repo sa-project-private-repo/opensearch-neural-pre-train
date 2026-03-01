@@ -102,9 +102,22 @@ class TripletCollator:
             "positive_texts": positives,
         }
 
+        # Pre-computed teacher scores for MarginMSE KD
+        if "teacher_pos_score" in batch[0]:
+            result["teacher_pos_scores"] = torch.tensor(
+                [item["teacher_pos_score"] for item in batch],
+                dtype=torch.float32,
+            )
+            result["teacher_neg_scores"] = torch.tensor(
+                [item.get("teacher_neg_score", 0.0) for item in batch],
+                dtype=torch.float32,
+            )
+
         # Add metadata
         if "pair_type" in batch[0]:
-            result["pair_types"] = [item.get("pair_type", "unknown") for item in batch]
+            result["pair_types"] = [
+                item.get("pair_type", "unknown") for item in batch
+            ]
 
         if "difficulty" in batch[0]:
             result["difficulties"] = [

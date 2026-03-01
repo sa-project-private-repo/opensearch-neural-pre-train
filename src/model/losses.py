@@ -35,6 +35,7 @@ class SPLADELossV33(nn.Module):
         lambda_kd: float = 0.0,
         kd_temperature: float = 1.0,
         lambda_initial_ratio: float = 0.1,
+        lambda_margin_mse: float = 0.0,
     ):
         super().__init__()
         self.lambda_q = lambda_q
@@ -44,6 +45,7 @@ class SPLADELossV33(nn.Module):
         self.lambda_kd = lambda_kd
         self.kd_temperature = kd_temperature
         self.lambda_initial_ratio = lambda_initial_ratio
+        self.lambda_margin_mse = lambda_margin_mse
 
         # Monitoring buffers
         self._avg_nonzero_q = 0.0
@@ -84,6 +86,35 @@ class SPLADELossV33(nn.Module):
             return target_lambda
         ratio = step / max(self.flops_warmup_steps, 1)
         return target_lambda * (r0 + (1.0 - r0) * ratio * ratio)
+
+    def _margin_mse_loss(
+        self,
+        anchor: torch.Tensor,
+        positive: torch.Tensor,
+        negative: torch.Tensor,
+        teacher_pos_scores: torch.Tensor,
+        teacher_neg_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        MarginMSE knowledge distillation loss (TAS-B, Hofstätter 2021).
+
+        Matches pairwise score margins between student and teacher:
+        L = MSE(s_pos - s_neg, t_pos - t_neg)
+
+        More robust than pointwise MSE for ranking tasks.
+
+        Args:
+            anchor: [batch, vocab] query representations
+            positive: [batch, vocab] positive doc representations
+            negative: [batch, vocab] hard negative representations
+            teacher_pos_scores: [batch] teacher(q, pos) scores
+            teacher_neg_scores: [batch] teacher(q, neg) scores
+        """
+        student_pos = (anchor * positive).sum(dim=-1)
+        student_neg = (anchor * negative).sum(dim=-1)
+        student_margin = student_pos - student_neg
+        teacher_margin = teacher_pos_scores - teacher_neg_scores
+        return F.mse_loss(student_margin, teacher_margin)
 
     def _infonce_loss(
         self,
@@ -132,6 +163,8 @@ class SPLADELossV33(nn.Module):
         negative_repr: torch.Tensor,
         global_step: int = 0,
         teacher_scores: Optional[torch.Tensor] = None,
+        teacher_pos_scores: Optional[torch.Tensor] = None,
+        teacher_neg_scores: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
@@ -142,7 +175,9 @@ class SPLADELossV33(nn.Module):
             positive_repr: [batch, vocab] positive doc representations
             negative_repr: [batch, vocab] hard negative representations
             global_step: current training step (for lambda scheduler)
-            teacher_scores: [batch, batch] optional KD scores
+            teacher_scores: [batch, batch] optional KD scores (KL)
+            teacher_pos_scores: [batch] teacher(q, pos) (MarginMSE)
+            teacher_neg_scores: [batch] teacher(q, neg) (MarginMSE)
 
         Returns:
             (total_loss, loss_dict)
@@ -161,7 +196,7 @@ class SPLADELossV33(nn.Module):
 
         loss = infonce + cur_lambda_q * flops_q + cur_lambda_d * flops_d
 
-        # Optional KD
+        # Optional KL divergence KD
         kd_loss = torch.tensor(0.0, device=loss.device)
         if self.lambda_kd > 0 and teacher_scores is not None:
             student_scores = (
@@ -176,6 +211,22 @@ class SPLADELossV33(nn.Module):
                 student_log_probs, teacher_probs, reduction="batchmean"
             )
             loss = loss + self.lambda_kd * kd_loss
+
+        # Optional MarginMSE KD
+        margin_mse = torch.tensor(0.0, device=loss.device)
+        if (
+            self.lambda_margin_mse > 0
+            and teacher_pos_scores is not None
+            and teacher_neg_scores is not None
+        ):
+            margin_mse = self._margin_mse_loss(
+                anchor_repr,
+                positive_repr,
+                negative_repr,
+                teacher_pos_scores,
+                teacher_neg_scores,
+            )
+            loss = loss + self.lambda_margin_mse * margin_mse
 
         # Monitoring
         with torch.no_grad():
@@ -196,6 +247,7 @@ class SPLADELossV33(nn.Module):
             "lambda_q": cur_lambda_q,
             "lambda_d": cur_lambda_d,
             "kd": kd_loss.item(),
+            "margin_mse": margin_mse.item(),
             "nonzero_q": nonzero_q.item(),
             "nonzero_d": nonzero_d.item(),
         }
