@@ -3,8 +3,9 @@
 .PHONY: help setup test train train-bg train-resume \
 	precompute-teacher train-v34-kd train-v34-kd-bg \
 	mine-multi-negatives train-v34-multi-neg train-v34-multi-neg-bg \
+	train-v34-1 train-v34-1-bg \
 	benchmark benchmark-ko-strategyqa benchmark-miracl benchmark-mrtydi \
-	benchmark-v34 benchmark-v34-multi-neg \
+	benchmark-v34 benchmark-v34-multi-neg benchmark-v34-1 \
 	export-hf tensorboard logs monitor \
 	lint format clean clean-outputs clean-cache \
 	upload-data download-data upload-outputs download-outputs info
@@ -34,6 +35,11 @@ V34_MULTI_NEG_CONFIG := configs/train_v34_multi_neg.yaml
 V34_MULTI_NEG_OUTPUT := outputs/train_v34_multi_neg
 V34_MULTI_NEG_CHECKPOINT := $(V34_MULTI_NEG_OUTPUT)/final_model/model.pt
 MULTI_NEG_DATA_DIR := data/v29.0_multi_neg
+
+# V34.1 Multi-neg with negative FLOPS fix
+V34_1_CONFIG := configs/train_v34_1_multi_neg.yaml
+V34_1_OUTPUT := outputs/train_v34_1_multi_neg
+V34_1_CHECKPOINT := $(V34_1_OUTPUT)/final_model/model.pt
 
 # S3 paths
 S3_BUCKET := s3://sewoong-ml-assets/opensearch-neural-pre-train
@@ -147,6 +153,22 @@ train-v34-multi-neg-bg: ## Start V34 multi-neg training (background)
 		--checkpoint $(V33_CHECKPOINT)' > $(V34_MULTI_NEG_OUTPUT)/nohup.log 2>&1 &
 	@echo "V34 multi-neg training started. Logs: $(V34_MULTI_NEG_OUTPUT)/nohup.log"
 
+train-v34-1: ## Start V34.1 training (neg FLOPS fix, requires mine-multi-negatives)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_1_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)
+
+train-v34-1-bg: ## Start V34.1 training (background)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	@mkdir -p $(V34_1_OUTPUT)
+	nohup bash -c '$(ACTIVATE) && torchrun --nproc_per_node=8 \
+		-m src.train.cli.train_v33_ddp \
+		--config $(V34_1_CONFIG) \
+		--checkpoint $(V33_CHECKPOINT)' > $(V34_1_OUTPUT)/nohup.log 2>&1 &
+	@echo "V34.1 training started. Logs: $(V34_1_OUTPUT)/nohup.log"
+
 # ============================================================================
 # Benchmark
 # ============================================================================
@@ -201,6 +223,20 @@ benchmark-v34-multi-neg: ## Run all benchmarks with V34 multi-neg model
 		--dataset mrtydi-ko \
 		--checkpoint $(V34_MULTI_NEG_CHECKPOINT) \
 		--output-dir outputs/benchmarks/v34_multi_neg/mrtydi-ko --cleanup
+
+benchmark-v34-1: ## Run all benchmarks with V34.1 model (neg FLOPS fix)
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--checkpoint $(V34_1_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_1/ko-strategyqa --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset miracl-ko \
+		--checkpoint $(V34_1_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_1/miracl-ko --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset mrtydi-ko \
+		--checkpoint $(V34_1_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v34_1/mrtydi-ko --cleanup
 
 # ============================================================================
 # Export & Serve

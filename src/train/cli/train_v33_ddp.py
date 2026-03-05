@@ -393,6 +393,7 @@ def train_epoch(
                     f"infonce={loss_dict['infonce']:.4f} | "
                     f"flops_q={loss_dict['flops_q']:.2f} | "
                     f"flops_d={loss_dict['flops_d']:.2f} | "
+                    f"flops_neg={loss_dict.get('flops_neg', 0):.2f} | "
                     f"lam_q={loss_dict['lambda_q']:.6f} | "
                     f"lam_d={loss_dict['lambda_d']:.6f} | "
                     f"nz_q={nz_q:.0f} | nz_d={nz_d:.0f} | "
@@ -411,6 +412,12 @@ def train_epoch(
                     tb_logger.log_scalar(
                         "train/flops_d", loss_dict["flops_d"], global_step
                     )
+                    if loss_dict.get("flops_neg", 0) > 0:
+                        tb_logger.log_scalar(
+                            "train/flops_neg",
+                            loss_dict["flops_neg"],
+                            global_step,
+                        )
                     tb_logger.log_scalar(
                         "train/lambda_q", loss_dict["lambda_q"], global_step
                     )

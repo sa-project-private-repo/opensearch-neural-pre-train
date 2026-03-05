@@ -1,0 +1,54 @@
+# V34.1: Multi-hard-negative training with negative FLOPS fix
+#
+# Identical to V34 except:
+# - FLOPS regularization now applied to hard negatives (not just pos/query)
+# - This should restore V33-level sparsity (nz_q~35, nz_d~58) while
+#   keeping multi-neg + MarginMSE training benefits
+#
+# V34 result: nz_q=104, nz_d=167 (too dense, no accuracy gain over V33)
+# V34.1 goal: nz_q<50, nz_d<80 with R@1 >= V33
+#
+# Prerequisites:
+#   1. python scripts/precompute_teacher_scores.py --save-embeddings
+#   2. python scripts/mine_multi_negatives.py --k 7
+#
+# Hardware: 8x NVIDIA B200 (183GB VRAM each)
+# Effective batch size: 16 * 16 * 8 = 2048
+
+model:
+  name: "skt/A.X-Encoder-base"
+  dropout: 0.1
+
+loss:
+  lambda_q: 0.01
+  lambda_d: 0.003
+  temperature: 1.0
+  flops_warmup_steps: 5000
+  lambda_kd: 0.0
+  kd_temperature: 1.0
+  lambda_margin_mse: 0.5
+  lambda_initial_ratio: 0.5
+
+data:
+  train_files:
+    - "data/v29.0_multi_neg/train_*.jsonl"
+  val_files:
+    - "data/v29.0_multi_neg/val.jsonl"
+  batch_size: 16
+  query_max_length: 64
+  doc_max_length: 256
+  num_workers: 4
+  num_hard_negatives: 7
+
+training:
+  num_epochs: 15
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 16
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v34_1_multi_neg"
+  log_every_n_steps: 50
+  save_every_n_epochs: 5
+  seed: 42

@@ -213,10 +213,22 @@ class SPLADELossV33(nn.Module):
         flops_q = self._flops_loss(anchor_repr)
         flops_d = self._flops_loss(positive_repr)
 
+        # Apply FLOPS to hard negatives (critical for multi-neg sparsity)
+        if negative_repr.dim() == 3:
+            # [batch, k, vocab] -> [batch*k, vocab]
+            neg_flat = negative_repr.reshape(-1, negative_repr.shape[-1])
+            flops_neg = self._flops_loss(neg_flat)
+        else:
+            flops_neg = self._flops_loss(negative_repr)
+
         cur_lambda_q = self._lambda_schedule(global_step, self.lambda_q)
         cur_lambda_d = self._lambda_schedule(global_step, self.lambda_d)
 
-        loss = infonce + cur_lambda_q * flops_q + cur_lambda_d * flops_d
+        loss = (
+            infonce
+            + cur_lambda_q * flops_q
+            + cur_lambda_d * (flops_d + flops_neg)
+        )
 
         # Optional KL divergence KD
         kd_loss = torch.tensor(0.0, device=loss.device)
@@ -266,6 +278,7 @@ class SPLADELossV33(nn.Module):
             "infonce": infonce.item(),
             "flops_q": flops_q.item(),
             "flops_d": flops_d.item(),
+            "flops_neg": flops_neg.item(),
             "lambda_q": cur_lambda_q,
             "lambda_d": cur_lambda_d,
             "kd": kd_loss.item(),
