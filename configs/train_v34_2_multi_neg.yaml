@@ -1,0 +1,56 @@
+# V34.2: Multi-hard-negative with rebalanced FLOPS vs MarginMSE
+#
+# V34 problem: nz_q=104, nz_d=167 (FLOPS not applied to negatives)
+# V34.1 problem: nz_q=120, nz_d=159 (lambda_d=0.003 too weak vs MarginMSE=0.5)
+#
+# Root cause analysis:
+#   FLOPS contribution ~0.028 vs MarginMSE ~0.3 (1.4% of loss)
+#   MarginMSE pushes model dense to match BGE-M3 teacher margins
+#
+# V34.2 fix:
+#   - lambda_q: 0.01 -> 0.03 (3x) — stronger query sparsity
+#   - lambda_d: 0.003 -> 0.01 (3.3x) — stronger doc sparsity
+#   - lambda_neg: 0.01 (new, separate control for hard negatives)
+#   - lambda_margin_mse: 0.5 -> 0.2 (reduce dense teacher pressure)
+#   - Expected FLOPS contribution: ~0.09 vs MarginMSE ~0.12 (balanced)
+#
+# Target: nz_q<50, nz_d<80 (V33-level sparsity)
+
+model:
+  name: "skt/A.X-Encoder-base"
+  dropout: 0.1
+
+loss:
+  lambda_q: 0.03                   # 3x V33 (was 0.01)
+  lambda_d: 0.01                   # 3.3x V33 (was 0.003)
+  lambda_neg: 0.01                 # Separate negative FLOPS control
+  temperature: 1.0
+  flops_warmup_steps: 5000
+  lambda_kd: 0.0
+  kd_temperature: 1.0
+  lambda_margin_mse: 0.2           # Reduced from 0.5
+  lambda_initial_ratio: 0.5
+
+data:
+  train_files:
+    - "data/v29.0_multi_neg/train_*.jsonl"
+  val_files:
+    - "data/v29.0_multi_neg/val.jsonl"
+  batch_size: 16
+  query_max_length: 64
+  doc_max_length: 256
+  num_workers: 4
+  num_hard_negatives: 7
+
+training:
+  num_epochs: 15
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 16
+  mixed_precision: "bf16"
+  output_dir: "outputs/train_v34_2_multi_neg"
+  log_every_n_steps: 50
+  save_every_n_epochs: 5
+  seed: 42

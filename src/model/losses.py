@@ -36,6 +36,7 @@ class SPLADELossV33(nn.Module):
         kd_temperature: float = 1.0,
         lambda_initial_ratio: float = 0.1,
         lambda_margin_mse: float = 0.0,
+        lambda_neg: float = 0.0,
     ):
         super().__init__()
         self.lambda_q = lambda_q
@@ -46,6 +47,7 @@ class SPLADELossV33(nn.Module):
         self.kd_temperature = kd_temperature
         self.lambda_initial_ratio = lambda_initial_ratio
         self.lambda_margin_mse = lambda_margin_mse
+        self.lambda_neg = lambda_neg if lambda_neg > 0 else lambda_d
 
         # Monitoring buffers
         self._avg_nonzero_q = 0.0
@@ -223,11 +225,15 @@ class SPLADELossV33(nn.Module):
 
         cur_lambda_q = self._lambda_schedule(global_step, self.lambda_q)
         cur_lambda_d = self._lambda_schedule(global_step, self.lambda_d)
+        cur_lambda_neg = self._lambda_schedule(
+            global_step, self.lambda_neg
+        )
 
         loss = (
             infonce
             + cur_lambda_q * flops_q
-            + cur_lambda_d * (flops_d + flops_neg)
+            + cur_lambda_d * flops_d
+            + cur_lambda_neg * flops_neg
         )
 
         # Optional KL divergence KD
@@ -281,6 +287,7 @@ class SPLADELossV33(nn.Module):
             "flops_neg": flops_neg.item(),
             "lambda_q": cur_lambda_q,
             "lambda_d": cur_lambda_d,
+            "lambda_neg": cur_lambda_neg,
             "kd": kd_loss.item(),
             "margin_mse": margin_mse.item(),
             "nonzero_q": nonzero_q.item(),

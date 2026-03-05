@@ -553,6 +553,7 @@ def main():
         kd_temperature=config.loss.kd_temperature,
         lambda_initial_ratio=config.loss.lambda_initial_ratio,
         lambda_margin_mse=config.loss.lambda_margin_mse,
+        lambda_neg=getattr(config.loss, "lambda_neg", 0.0),
     ).to(device)
 
     # Optimizer
