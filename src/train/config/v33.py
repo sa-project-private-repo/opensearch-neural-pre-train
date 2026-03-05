@@ -54,6 +54,9 @@ class V33LossConfig:
     lambda_initial_ratio: float = 0.1
     """Initial ratio for FLOPS lambda warmup (0.1 = start at 10%)."""
 
+    lambda_neg: float = 0.0
+    """Hard negative FLOPS weight (0 = use lambda_d)."""
+
 
 @dataclass
 class V33DataConfig:
