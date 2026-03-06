@@ -5,8 +5,10 @@
 	mine-multi-negatives train-v34-multi-neg train-v34-multi-neg-bg \
 	train-v34-1 train-v34-1-bg \
 	train-v34-2 train-v34-2-bg \
+	train-v35 train-v35-bg \
 	benchmark benchmark-ko-strategyqa benchmark-miracl benchmark-mrtydi \
 	benchmark-v34 benchmark-v34-multi-neg benchmark-v34-1 benchmark-v34-2 \
+	benchmark-v35 \
 	export-hf tensorboard logs monitor \
 	lint format clean clean-outputs clean-cache \
 	upload-data download-data upload-outputs download-outputs info
@@ -41,6 +43,13 @@ MULTI_NEG_DATA_DIR := data/v29.0_multi_neg
 V34_1_CONFIG := configs/train_v34_1_multi_neg.yaml
 V34_1_OUTPUT := outputs/train_v34_1_multi_neg
 V34_1_CHECKPOINT := $(V34_1_OUTPUT)/final_model/model.pt
+
+# V35 Two-Phase Training
+V35_PHASE1_CONFIG := configs/train_v35_phase1.yaml
+V35_PHASE1_OUTPUT := outputs/train_v35_phase1
+V35_PHASE2_CONFIG := configs/train_v35_phase2.yaml
+V35_PHASE2_OUTPUT := outputs/train_v35_phase2
+V35_CHECKPOINT := $(V35_PHASE2_OUTPUT)/final_model/model.pt
 
 # V34.2 Rebalanced FLOPS vs MarginMSE
 V34_2_CONFIG := configs/train_v34_2_multi_neg.yaml
@@ -175,6 +184,16 @@ train-v34-1-bg: ## Start V34.1 training (background)
 		--checkpoint $(V33_CHECKPOINT)' > $(V34_1_OUTPUT)/nohup.log 2>&1 &
 	@echo "V34.1 training started. Logs: $(V34_1_OUTPUT)/nohup.log"
 
+train-v35: ## Start V35 two-phase training (Phase 1: learn, Phase 2: compress)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	bash scripts/run_v35_pipeline.sh
+
+train-v35-bg: ## Start V35 two-phase training (background)
+	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
+	@mkdir -p $(V35_PHASE1_OUTPUT) $(V35_PHASE2_OUTPUT)
+	nohup bash scripts/run_v35_pipeline.sh > $(V35_PHASE2_OUTPUT)/pipeline.log 2>&1 &
+	@echo "V35 pipeline started. Logs: $(V35_PHASE2_OUTPUT)/pipeline.log"
+
 train-v34-2: ## Start V34.2 training (rebalanced FLOPS)
 	@test -d $(MULTI_NEG_DATA_DIR) || (echo "Run 'make mine-multi-negatives' first" && exit 1)
 	$(ACTIVATE) && torchrun --nproc_per_node=8 \
@@ -259,6 +278,20 @@ benchmark-v34-1: ## Run all benchmarks with V34.1 model (neg FLOPS fix)
 		--dataset mrtydi-ko \
 		--checkpoint $(V34_1_CHECKPOINT) \
 		--output-dir outputs/benchmarks/v34_1/mrtydi-ko --cleanup
+
+benchmark-v35: ## Run all benchmarks with V35 model (two-phase)
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset ko-strategyqa \
+		--checkpoint $(V35_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v35/ko-strategyqa --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset miracl-ko \
+		--checkpoint $(V35_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v35/miracl-ko --cleanup
+	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
+		--dataset mrtydi-ko \
+		--checkpoint $(V35_CHECKPOINT) \
+		--output-dir outputs/benchmarks/v35/mrtydi-ko --cleanup
 
 benchmark-v34-2: ## Run all benchmarks with V34.2 model (rebalanced FLOPS)
 	$(ACTIVATE) && $(PYTHON) -m benchmark.hf_runner \
