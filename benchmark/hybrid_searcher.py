@@ -400,6 +400,142 @@ class HybridNativeSearcher(BaseSearcher):
         )
 
 
+class HybridBM25SparseSearcher(BaseSearcher):
+    """Hybrid search combining BM25 and Neural Sparse with late fusion."""
+
+    def __init__(
+        self,
+        client: OpenSearch,
+        bm25_index: str,
+        sparse_index: str,
+        sparse_encoder: NeuralSparseEncoder,
+        fusion_method: str = "rrf",
+        top_k: int = 10,
+        retrieval_k: int = 100,
+        **fusion_kwargs,
+    ):
+        super().__init__(client, bm25_index, top_k)
+        self.bm25_index = bm25_index
+        self.sparse_index = sparse_index
+        self.sparse_encoder = sparse_encoder
+        self.retrieval_k = retrieval_k
+        self.fusion: ScoreFusion = create_fusion_method(
+            fusion_method, **fusion_kwargs
+        )
+
+        self._bm25_searcher = BM25Searcher(
+            client=client, index_name=bm25_index, top_k=retrieval_k,
+        )
+        self._sparse_searcher = NeuralSparseSearcher(
+            client=client, index_name=sparse_index,
+            encoder=sparse_encoder, top_k=retrieval_k,
+        )
+
+    def search(self, query: str) -> SearchResponse:
+        start = time.perf_counter()
+        bm25_response = self._bm25_searcher.search(query)
+        sparse_response = self._sparse_searcher.search(query)
+
+        bm25_ranked = [
+            RankedResult(doc_id=r.doc_id, score=r.score, rank=r.rank)
+            for r in bm25_response.results
+        ]
+        sparse_ranked = [
+            RankedResult(doc_id=r.doc_id, score=r.score, rank=r.rank)
+            for r in sparse_response.results
+        ]
+
+        fused_results = self.fusion.fuse(bm25_ranked, sparse_ranked)
+
+        final_results = [
+            SearchResult(doc_id=r.doc_id, score=r.score, rank=i + 1)
+            for i, r in enumerate(fused_results[: self.top_k])
+        ]
+
+        total_latency = (time.perf_counter() - start) * 1000
+        return SearchResponse(
+            results=final_results,
+            latency_ms=total_latency,
+            total_hits=len(fused_results),
+        )
+
+
+class HybridTripleSearcher(BaseSearcher):
+    """Triple hybrid: BM25 + Dense + Sparse with 3-way RRF."""
+
+    def __init__(
+        self,
+        client: OpenSearch,
+        bm25_index: str,
+        dense_index: str,
+        sparse_index: str,
+        dense_encoder: BgeM3Encoder,
+        sparse_encoder: NeuralSparseEncoder,
+        top_k: int = 10,
+        retrieval_k: int = 100,
+        k: int = 60,
+    ):
+        super().__init__(client, bm25_index, top_k)
+        self.retrieval_k = retrieval_k
+        self.rrf_k = k
+
+        self._bm25_searcher = BM25Searcher(
+            client=client, index_name=bm25_index, top_k=retrieval_k,
+        )
+        self._semantic_searcher = SemanticSearcher(
+            client=client, index_name=dense_index,
+            encoder=dense_encoder, top_k=retrieval_k,
+        )
+        self._sparse_searcher = NeuralSparseSearcher(
+            client=client, index_name=sparse_index,
+            encoder=sparse_encoder, top_k=retrieval_k,
+        )
+
+    def search(self, query: str) -> SearchResponse:
+        start = time.perf_counter()
+
+        bm25_resp = self._bm25_searcher.search(query)
+        dense_resp = self._semantic_searcher.search(query)
+        sparse_resp = self._sparse_searcher.search(query)
+
+        # Build rank maps
+        bm25_ranks = {r.doc_id: r.rank for r in bm25_resp.results}
+        dense_ranks = {r.doc_id: r.rank for r in dense_resp.results}
+        sparse_ranks = {r.doc_id: r.rank for r in sparse_resp.results}
+
+        all_docs = set(bm25_ranks) | set(dense_ranks) | set(sparse_ranks)
+        max_rank = max(
+            len(bm25_resp.results) + 1,
+            len(dense_resp.results) + 1,
+            len(sparse_resp.results) + 1,
+            100,
+        )
+
+        # 3-way RRF
+        fused: Dict[str, float] = {}
+        for doc_id in all_docs:
+            score = (
+                1 / (self.rrf_k + bm25_ranks.get(doc_id, max_rank))
+                + 1 / (self.rrf_k + dense_ranks.get(doc_id, max_rank))
+                + 1 / (self.rrf_k + sparse_ranks.get(doc_id, max_rank))
+            )
+            fused[doc_id] = score
+
+        sorted_docs = sorted(fused.items(), key=lambda x: x[1], reverse=True)
+
+        final_results = [
+            SearchResult(doc_id=doc_id, score=score, rank=i + 1)
+            for i, (doc_id, score) in enumerate(sorted_docs[: self.top_k])
+        ]
+
+        total_latency = (time.perf_counter() - start) * 1000
+        return SearchResponse(
+            results=final_results,
+            latency_ms=total_latency,
+            total_hits=len(sorted_docs),
+        )
+
+
 def create_hybrid_searchers(
     client: OpenSearch,
     config: BenchmarkConfig,
@@ -481,5 +617,28 @@ def create_hybrid_searchers(
             k=60,
             sparse_weight=0.4,
             dense_weight=0.6,
+        ),
+        # BM25 + Sparse (late fusion)
+        "bm25_sparse_rrf": HybridBM25SparseSearcher(
+            client=client,
+            bm25_index=config.bm25_index,
+            sparse_index=config.sparse_index,
+            sparse_encoder=sparse_encoder,
+            fusion_method="rrf",
+            top_k=config.top_k,
+            retrieval_k=100,
+            k=60,
+        ),
+        # Triple hybrid: BM25 + Dense + Sparse
+        "triple_rrf": HybridTripleSearcher(
+            client=client,
+            bm25_index=config.bm25_index,
+            dense_index=config.dense_index,
+            sparse_index=config.sparse_index,
+            dense_encoder=dense_encoder,
+            sparse_encoder=sparse_encoder,
+            top_k=config.top_k,
+            retrieval_k=100,
+            k=60,
         ),
     }

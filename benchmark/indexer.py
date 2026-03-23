@@ -125,14 +125,8 @@ def bulk_actions_sparse(
         token_to_id = tokenizer.get_vocab()
 
     for doc in docs:
+        # Use string token keys for rank_features type
         sparse = doc.sparse_embedding
-        if token_to_id is not None:
-            # Convert string token keys to integer IDs
-            sparse = {}
-            for token, weight in doc.sparse_embedding.items():
-                tid = token_to_id.get(token)
-                if tid is not None:
-                    sparse[str(tid)] = weight
         yield {
             "_index": index_name,
             "_id": doc.doc_id,

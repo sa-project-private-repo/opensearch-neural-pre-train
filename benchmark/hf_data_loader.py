@@ -1,8 +1,10 @@
 """
 HuggingFace dataset loader for MTEB-style retrieval benchmarks.
 """
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from datasets import load_dataset
@@ -36,6 +38,14 @@ AVAILABLE_DATASETS = {
         "name": "castorini/mr-tydi",
         "config": "korean",
         "description": "Mr. TyDi Korean retrieval benchmark (test split)",
+    },
+    "ecom-ko": {
+        "name": "local",
+        "path": "data/ecommerce/benchmark",
+        "description": (
+            "Korean e-commerce product search "
+            "(500 queries, 5K docs)"
+        ),
     },
 }
 
@@ -388,6 +398,67 @@ def load_mrtydi_ko(
     )
 
 
+def load_ecom_ko(
+    max_queries: Optional[int] = None,
+) -> MTEBBenchmarkData:
+    """Load Korean e-commerce benchmark from local files."""
+    benchmark_dir = Path("data/ecommerce/benchmark")
+
+    # Load corpus
+    documents: Dict[str, str] = {}
+    doc_titles: Dict[str, str] = {}
+    with open(benchmark_dir / "corpus.jsonl", encoding="utf-8") as f:
+        for line in f:
+            doc = json.loads(line.strip())
+            doc_id = doc["_id"]
+            documents[doc_id] = doc["text"]
+            doc_titles[doc_id] = doc.get("title", "")
+
+    # Load queries
+    query_id_to_text: Dict[str, str] = {}
+    with open(
+        benchmark_dir / "queries.jsonl", encoding="utf-8"
+    ) as f:
+        for line in f:
+            q = json.loads(line.strip())
+            query_id_to_text[q["_id"]] = q["text"]
+
+    # Load qrels
+    query_relevant_docs: Dict[str, List[str]] = {}
+    with open(
+        benchmark_dir / "qrels.jsonl", encoding="utf-8"
+    ) as f:
+        for line in f:
+            rel = json.loads(line.strip())
+            qid = rel["query-id"]
+            doc_id = rel["corpus-id"]
+            score = rel["score"]
+            if score > 0:
+                if qid not in query_relevant_docs:
+                    query_relevant_docs[qid] = []
+                query_relevant_docs[qid].append(doc_id)
+
+    valid_query_ids = list(query_relevant_docs.keys())
+    if max_queries:
+        valid_query_ids = valid_query_ids[:max_queries]
+
+    queries = [query_id_to_text[qid] for qid in valid_query_ids]
+
+    logger.info(
+        f"Loaded {len(queries)} queries, "
+        f"{len(documents)} documents"
+    )
+
+    return MTEBBenchmarkData(
+        queries=queries,
+        query_ids=valid_query_ids,
+        query_relevant_docs=query_relevant_docs,
+        documents=documents,
+        doc_titles=doc_titles,
+        dataset_name="ecom-ko",
+    )
+
+
 def load_hf_dataset(
     dataset_name: str,
     max_queries: Optional[int] = None,
@@ -408,6 +479,8 @@ def load_hf_dataset(
         return load_miracl_ko(max_queries)
     elif dataset_name == "mrtydi-ko":
         return load_mrtydi_ko(max_queries)
+    elif dataset_name == "ecom-ko":
+        return load_ecom_ko(max_queries)
     else:
         raise ValueError(
             f"Unknown dataset: {dataset_name}. "

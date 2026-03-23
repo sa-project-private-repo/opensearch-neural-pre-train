@@ -302,7 +302,7 @@ def main():
         "--dataset",
         type=str,
         default="ko-strategyqa",
-        choices=["ko-strategyqa", "miracl-ko", "mrtydi-ko"],
+        choices=["ko-strategyqa", "miracl-ko", "mrtydi-ko", "ecom-ko"],
         help="Dataset to benchmark",
     )
     parser.add_argument(

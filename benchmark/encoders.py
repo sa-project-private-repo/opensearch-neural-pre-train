@@ -64,6 +64,10 @@ class BgeM3Encoder:
         )
         return embeddings
 
+    def encode_single(self, text: str) -> list:
+        """Encode single text and return vector as list."""
+        return self.encode(text)[0].tolist()
+
 
 class NeuralSparseEncoder:
     """Sparse encoder using HuggingFace AutoModelForMaskedLM format."""

@@ -125,7 +125,6 @@ class IndexManager:
         body = {
             "settings": {
                 "index": {
-                    "sparse": True,
                     "mapping.total_fields.limit": 100000,
                 },
                 "number_of_shards": 6,
@@ -136,15 +135,7 @@ class IndexManager:
                     "doc_id": {"type": "keyword"},
                     "content": {"type": "text"},
                     "sparse_embedding": {
-                        "type": "sparse_vector",
-                        "method": {
-                            "name": "seismic",
-                            "parameters": {
-                                "n_postings": 300,
-                                "cluster_ratio": 0.1,
-                                "summary_prune_ratio": 0.4,
-                            },
-                        },
+                        "type": "rank_features",
                     },
                 }
             },
